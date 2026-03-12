@@ -1,6 +1,8 @@
 """DS5 (DualSense) HID parsing and communication."""
 
 import hid
+import logging
+logger = logging.getLogger(__name__)
 
 # Device IDs
 DS5_VID = 0x054C
@@ -79,6 +81,7 @@ class DS5Device:
         self.interface: int = hid_info.get("interface_number", -1)
         self._usage_page: int = hid_info.get("usage_page", 0)
         self.is_bt: bool | None = None  # Determined on open
+        self.last_error: str = ''
         self.device: hid.Device | None = None
 
     @property
@@ -92,6 +95,7 @@ class DS5Device:
         """Open the HID device. Returns True on success."""
         try:
             self.device = hid.Device(path=self.path)
+            logger.info(f"Opened device at {self.path}")
             # Read one report to determine USB vs BT
             test_report = self.device.read(64, timeout=100)
             if test_report:
@@ -104,7 +108,9 @@ class DS5Device:
                 # Default to USB if we can't determine
                 self.is_bt = False
             return True
-        except Exception:
+        except Exception as e:
+            self.last_error = str(e)
+            logger.error(f"Failed to open device: {e}")
             self.device = None
             return False
 

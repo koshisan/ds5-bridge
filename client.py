@@ -170,7 +170,7 @@ class DS5BridgeClient:
 
         device = self.devices[idx]
         if not device.open():
-            self._log(f"ERROR: Failed to open {device.product_name}")
+            self._log(f"ERROR: Failed to open {device.product_name}: {device.last_error}")
             return
 
         self.active_device = device
