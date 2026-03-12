@@ -82,7 +82,7 @@ class DS5Device:
         self._usage_page: int = hid_info.get("usage_page", 0)
         self.is_bt: bool | None = None  # Determined on open
         self.last_error: str = ''
-        self.device: hid.Device | None = None
+        self.device = None
 
     @property
     def display_name(self) -> str:
@@ -94,7 +94,8 @@ class DS5Device:
     def open(self) -> bool:
         """Open the HID device. Returns True on success."""
         try:
-            self.device = hid.Device(path=self.path)
+            self.device = hid.device()
+            self.device.open_path(self.path)
             logger.info(f"Opened device at {self.path}")
             # Read one report to determine USB vs BT
             test_report = self.device.read(64, timeout=100)
