@@ -98,7 +98,7 @@ class DS5Device:
             self.device.open_path(self.path)
             logger.info(f"Opened device at {self.path}")
             # Read one report to determine USB vs BT
-            test_report = self.device.read(64, timeout=100)
+            test_report = self.device.read(64, 100)
             if test_report:
                 # BT reports start with 0x31, USB with 0x01
                 if len(test_report) > 0:
@@ -129,7 +129,7 @@ class DS5Device:
         if not self.device:
             return None
         try:
-            data = self.device.read(128, timeout=timeout_ms)
+            data = self.device.read(128, timeout_ms)
             if data:
                 return bytes(data)
             return None
