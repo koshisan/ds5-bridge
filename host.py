@@ -4,6 +4,8 @@
 Usage: python host.py [--port 5555]
 """
 import argparse
+import ctypes
+import ctypes.wintypes as wintypes
 import socket
 import sys
 import time
@@ -11,6 +13,41 @@ import time
 PIPE_PATH = r"\\.\pipe\ds5virtual"
 DEFAULT_PORT = 5555
 REPORT_SIZE = 64
+
+kernel32 = ctypes.windll.kernel32
+GENERIC_WRITE = 0x40000000
+OPEN_EXISTING = 3
+INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
+
+
+def open_pipe():
+    """Open pipe with CreateFile for reliable writes."""
+    handle = kernel32.CreateFileW(
+        PIPE_PATH,
+        GENERIC_WRITE,
+        0,      # no sharing
+        None,   # security
+        OPEN_EXISTING,
+        0,      # flags
+        None)   # template
+    if handle == INVALID_HANDLE_VALUE:
+        err = ctypes.get_last_error()
+        print(f"Failed to open pipe: error {err}")
+        return None
+    return handle
+
+
+def write_pipe(handle, data):
+    """Write exactly len(data) bytes to pipe."""
+    written = wintypes.DWORD(0)
+    buf = (ctypes.c_byte * len(data))(*data)
+    ok = kernel32.WriteFile(
+        handle,
+        buf,
+        len(data),
+        ctypes.byref(written),
+        None)
+    return ok and written.value == len(data)
 
 
 def main():
@@ -21,12 +58,9 @@ def main():
 
     # Open pipe
     print(f"Opening {PIPE_PATH}...")
-    try:
-        pipe = open(PIPE_PATH, 'wb', buffering=0)
-    except FileNotFoundError:
-        print("Pipe not found! Is DS5Virtual driver loaded?")
+    handle = open_pipe()
+    if not handle:
         return 1
-
     print("Pipe connected!")
 
     # UDP socket
@@ -38,42 +72,38 @@ def main():
     start = time.monotonic()
     last_print = start
     last_addr = None
+    last_btn = bytes(3)
 
     try:
         while True:
             data, addr = sock.recvfrom(256)
-            if len(data) < 1:
-                continue
+            if len(data) < REPORT_SIZE:
+                report = bytearray(REPORT_SIZE)
+                report[:len(data)] = data
+                data = bytes(report)
 
             if addr != last_addr:
                 print(f"Client: {addr[0]}:{addr[1]}")
                 last_addr = addr
 
-            # Ensure 64 bytes
-            if len(data) < REPORT_SIZE:
-                report = bytearray(REPORT_SIZE)
-                report[:len(data)] = data
-            else:
-                report = data[:REPORT_SIZE]
+            # Print on button changes
+            btn = data[8:11]
+            if btn != last_btn:
+                print("  BTN: %02X %02X %02X" % (btn[0], btn[1], btn[2]))
+                last_btn = btn
 
-            # Print immediately on button press
-            if report[8] != 0x08 or report[9] != 0 or report[10] != 0:
-                print("  BTN! [%02X %02X %02X] LX=%d LY=%d" % (report[8], report[9], report[10], report[1], report[2]))
-
-            try:
-                pipe.write(bytes(report))
-                count += 1
-            except (BrokenPipeError, OSError) as e:
-                print(f"Pipe error: {e}")
+            if not write_pipe(handle, data[:REPORT_SIZE]):
+                print("Pipe write failed!")
                 break
 
+            count += 1
             now = time.monotonic()
-            if now - last_print >= 0.3:
+            if now - last_print >= 1.0:
                 rate = count / (now - start)
                 print(f"\r  [{count} pkts, {rate:.0f}/s] "
-                      f"LX={report[1]:3d} LY={report[2]:3d} "
-                      f"RX={report[3]:3d} RY={report[4]:3d} "
-                      f"LT={report[5]:3d} RT={report[6]:3d}",
+                      f"LX={data[1]:3d} LY={data[2]:3d} "
+                      f"RX={data[3]:3d} RY={data[4]:3d} "
+                      f"LT={data[5]:3d} RT={data[6]:3d}",
                       end="", flush=True)
                 last_print = now
 
@@ -82,7 +112,7 @@ def main():
 
     elapsed = time.monotonic() - start
     print(f"\n\nDone. {count} packets in {elapsed:.1f}s")
-    pipe.close()
+    kernel32.CloseHandle(handle)
     sock.close()
     return 0
 
