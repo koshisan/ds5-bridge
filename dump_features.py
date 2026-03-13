@@ -26,7 +26,7 @@ dev.open_path(info["path"])
 
 results = {}
 
-for rid in range(0x01, 0x80):
+for rid in range(0x01, 0x100):
     # Try largest size first — hidapi returns actual size
     for size in [256, 128, 78, 64, 49, 41, 32, 20, 16]:
         try:
