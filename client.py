@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""DS5 Bridge Client (UDP) - Bidirectional: reads real DS5 → sends input to host,
-receives output reports from host → writes to real DS5.
+"""DS5 Bridge Client (UDP) - Bidirectional DS5 bridge.
 
 Usage: python client.py <host_ip> [--port 5555]
 """
 import argparse
-import select
 import socket
+import struct
 import sys
 import threading
 import time
+import zlib
 
 try:
     import hid
@@ -30,9 +30,16 @@ def find_ds5():
     return None
 
 
+def ds5_bt_crc32(data):
+    """CRC32 with DS5 BT seed byte 0xA2."""
+    return zlib.crc32(bytes([0xA2]) + data) & 0xFFFFFFFF
+
+
 def output_receiver(sock, dev, is_bt):
     """Receive output reports from host and write to real DS5."""
     out_count = 0
+    seq = 0
+
     while True:
         try:
             data, addr = sock.recvfrom(256)
@@ -40,26 +47,34 @@ def output_receiver(sock, dev, is_bt):
                 continue
 
             if is_bt:
-                # Convert USB output report to BT format
-                # USB: 0x02 + 47 bytes = 48 bytes
-                # BT:  0x31 + 1 seq + 1 tag + data + CRC32
-                # For now, write raw — hidapi handles framing
-                bt_report = bytearray(78)
-                bt_report[0] = 0x31  # BT output report ID
-                bt_report[1] = 0x02  # flags
-                bt_report[2] = data[1] if len(data) > 1 else 0  # flags2
-                copy_len = min(len(data) - 1, 75)
-                bt_report[3:3 + copy_len] = data[1:1 + copy_len]
-                dev.write(bytes(bt_report))
+                # Build BT output report (78 bytes)
+                # USB input: [0]=0x02 [1]=flags0 [2]=flags1 [3..]=data
+                # BT output: [0]=0x31 [1]=seq [2]=0x10 [3]=flags0 [4]=flags1 [5..]=data [74..77]=CRC32
+                bt_out = bytearray(78)
+                bt_out[0] = 0x31  # BT report ID
+                bt_out[1] = seq   # Sequence number
+                bt_out[2] = 0x10  # Tag: HID output
+
+                # Copy USB payload (skip report ID byte 0x02)
+                usb_payload = data[1:] if len(data) > 1 else b''
+                copy_len = min(len(usb_payload), 71)  # 78 - 3 header - 4 CRC
+                bt_out[3:3 + copy_len] = usb_payload[:copy_len]
+
+                # Calculate CRC32 over bytes 0..73
+                crc = ds5_bt_crc32(bytes(bt_out[:74]))
+                struct.pack_into('<I', bt_out, 74, crc)
+
+                dev.write(bytes(bt_out))
+                seq = (seq + 16) & 0xFF
             else:
                 # USB: write as-is
                 dev.write(bytes(data))
 
             out_count += 1
             if out_count == 1:
-                print(f"\n  [OUTPUT] First output report received ({len(data)} bytes)")
+                print(f"\n  [OUTPUT] First report forwarded to DS5 ({len(data)} bytes in)")
             elif out_count % 100 == 0:
-                print(f"\n  [OUTPUT] {out_count} reports forwarded to DS5")
+                print(f"\n  [OUTPUT] {out_count} reports forwarded")
 
         except Exception as e:
             print(f"\n  [OUTPUT] Error: {e}")
@@ -72,7 +87,6 @@ def main():
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = parser.parse_args()
 
-    # Find DS5
     print("Searching for DualSense...")
     info = find_ds5()
     if not info:
@@ -82,7 +96,6 @@ def main():
     name = "DualSense Edge" if info["product_id"] == 0x0DF2 else "DualSense"
     print(f"Found: {name}")
 
-    # Open device
     dev = hid.device()
     try:
         dev.open_path(info["path"])
@@ -90,7 +103,6 @@ def main():
         print(f"Failed to open: {e}")
         return 1
 
-    # Detect BT vs USB
     test = dev.read(128, 1000)
     if not test:
         print("No data from controller!")
@@ -101,14 +113,12 @@ def main():
     print(f"Connection: {'Bluetooth' if is_bt else 'USB'}")
     print(f"Report: {len(test)} bytes, first=0x{test[0]:02X}")
 
-    # UDP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(("0.0.0.0", 0))  # Bind to any port so we can receive replies
+    sock.bind(("0.0.0.0", 0))
     target = (args.host, args.port)
     print(f"Sending to {args.host}:{args.port}")
     print(f"Listening for output reports on port {sock.getsockname()[1]}\n")
 
-    # Start output receiver thread
     out_thread = threading.Thread(target=output_receiver, args=(sock, dev, is_bt),
                                   daemon=True)
     out_thread.start()
@@ -123,7 +133,6 @@ def main():
             if not data:
                 continue
 
-            # Convert to 64-byte USB format
             report = bytearray(USB_REPORT_SIZE)
             report[0] = 0x01
 
