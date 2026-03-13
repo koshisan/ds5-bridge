@@ -64,7 +64,7 @@ def main():
                 break
 
             now = time.monotonic()
-            if now - last_print >= 2.0:
+            if now - last_print >= 0.3:
                 rate = count / (now - start)
                 print(f"\r  [{count} pkts, {rate:.0f}/s] "
                       f"LX={report[1]:3d} LY={report[2]:3d} "
