@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""DS5 Bridge Client (UDP) - Reads real DualSense via hidapi, sends to host.
+"""DS5 Bridge Client (UDP) - Bidirectional: reads real DS5 → sends input to host,
+receives output reports from host → writes to real DS5.
 
 Usage: python client.py <host_ip> [--port 5555]
 """
 import argparse
+import select
 import socket
 import sys
+import threading
 import time
 
 try:
@@ -25,6 +28,42 @@ def find_ds5():
         if info["product_id"] in DS5_PIDS:
             return info
     return None
+
+
+def output_receiver(sock, dev, is_bt):
+    """Receive output reports from host and write to real DS5."""
+    out_count = 0
+    while True:
+        try:
+            data, addr = sock.recvfrom(256)
+            if len(data) < 2:
+                continue
+
+            if is_bt:
+                # Convert USB output report to BT format
+                # USB: 0x02 + 47 bytes = 48 bytes
+                # BT:  0x31 + 1 seq + 1 tag + data + CRC32
+                # For now, write raw — hidapi handles framing
+                bt_report = bytearray(78)
+                bt_report[0] = 0x31  # BT output report ID
+                bt_report[1] = 0x02  # flags
+                bt_report[2] = data[1] if len(data) > 1 else 0  # flags2
+                copy_len = min(len(data) - 1, 75)
+                bt_report[3:3 + copy_len] = data[1:1 + copy_len]
+                dev.write(bytes(bt_report))
+            else:
+                # USB: write as-is
+                dev.write(bytes(data))
+
+            out_count += 1
+            if out_count == 1:
+                print(f"\n  [OUTPUT] First output report received ({len(data)} bytes)")
+            elif out_count % 100 == 0:
+                print(f"\n  [OUTPUT] {out_count} reports forwarded to DS5")
+
+        except Exception as e:
+            print(f"\n  [OUTPUT] Error: {e}")
+            break
 
 
 def main():
@@ -58,14 +97,21 @@ def main():
         dev.close()
         return 1
 
-    is_bt = len(test) > 64  # BT reports are larger (~78 bytes)
+    is_bt = len(test) > 64
     print(f"Connection: {'Bluetooth' if is_bt else 'USB'}")
     print(f"Report: {len(test)} bytes, first=0x{test[0]:02X}")
 
     # UDP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("0.0.0.0", 0))  # Bind to any port so we can receive replies
     target = (args.host, args.port)
-    print(f"Sending to {args.host}:{args.port}\n")
+    print(f"Sending to {args.host}:{args.port}")
+    print(f"Listening for output reports on port {sock.getsockname()[1]}\n")
+
+    # Start output receiver thread
+    out_thread = threading.Thread(target=output_receiver, args=(sock, dev, is_bt),
+                                  daemon=True)
+    out_thread.start()
 
     count = 0
     start = time.monotonic()
@@ -79,21 +125,16 @@ def main():
 
             # Convert to 64-byte USB format
             report = bytearray(USB_REPORT_SIZE)
-            report[0] = 0x01  # USB report ID
+            report[0] = 0x01
 
             if is_bt:
-                # BT: data[0] might be 0x31 (report ID) or first data byte
-                # hidapi on Windows strips report ID, on Linux keeps it
                 if data[0] == 0x31:
-                    # Report ID present, skip it + 1 padding byte
                     src = data[2:]
                 else:
-                    # Report ID stripped, skip 1 padding byte
                     src = data[1:]
                 copy_len = min(len(src), USB_REPORT_SIZE - 1)
                 report[1:1 + copy_len] = src[:copy_len]
             else:
-                # USB: data[0] might be 0x01 (report ID) or first data byte
                 if data[0] == 0x01:
                     src = data[1:]
                 else:
