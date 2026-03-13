@@ -56,6 +56,11 @@ def main():
             else:
                 report = data[:REPORT_SIZE]
 
+            # Print immediately on button press
+            if report[8] != 0x08 or report[9] != 0 or report[10] != 0:
+                print(f'
+  BTN! [{report[8]:02X} {report[9]:02X} {report[10]:02X}] LX={report[1]} LY={report[2]}')
+
             try:
                 pipe.write(bytes(report))
                 count += 1
