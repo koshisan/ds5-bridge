@@ -71,8 +71,9 @@ def output_receiver(sock, dev, is_bt):
                 dev.write(bytes(data))
 
             out_count += 1
-            if True:
-                print(f"\n  [OUTPUT] #{out_count} {len(data)}B: {data[:10].hex(" ")}")
+            h = data[:10].hex(" ")
+            print(f"\n  [OUTPUT] #{out_count} {len(data)}B: {h}")
+                print(f"
 
         except Exception as e:
             print(f"\n  [OUTPUT] Error: {e}")
