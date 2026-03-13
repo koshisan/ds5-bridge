@@ -71,10 +71,8 @@ def output_receiver(sock, dev, is_bt):
                 dev.write(bytes(data))
 
             out_count += 1
-            if out_count == 1:
-                print(f"\n  [OUTPUT] First report forwarded to DS5 ({len(data)} bytes in)")
-            elif out_count % 100 == 0:
-                print(f"\n  [OUTPUT] {out_count} reports forwarded")
+            if True:
+                print(f"\n  [OUTPUT] #{out_count} {len(data)}B: {data[:10].hex(" ")}")
 
         except Exception as e:
             print(f"\n  [OUTPUT] Error: {e}")
