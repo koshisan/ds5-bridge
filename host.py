@@ -58,8 +58,7 @@ def main():
 
             # Print immediately on button press
             if report[8] != 0x08 or report[9] != 0 or report[10] != 0:
-                print(f'
-  BTN! [{report[8]:02X} {report[9]:02X} {report[10]:02X}] LX={report[1]} LY={report[2]}')
+                print("  BTN! [%02X %02X %02X] LX=%d LY=%d" % (report[8], report[9], report[10], report[1], report[2]))
 
             try:
                 pipe.write(bytes(report))
