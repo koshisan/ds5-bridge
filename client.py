@@ -72,7 +72,6 @@ def output_receiver(sock, dev, is_bt):
 
             out_count += 1
             h = data[:10].hex(" ")
-            print(f"\n  [OUTPUT] #{out_count} {len(data)}B: {h}")
                 print(f"
 
         except Exception as e:
