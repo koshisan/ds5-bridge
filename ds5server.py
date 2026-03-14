@@ -176,8 +176,14 @@ class DS5Server:
 
             # Parse S16 interleaved samples
             samples = np.frombuffer(in_data, dtype=np.int16).reshape(-1, channels)
-            left = samples[:, 0].astype(np.float64)
-            right = samples[:, 1].astype(np.float64) if channels >= 2 else left
+            if channels >= 4:
+                # Channels 3+4 (index 2+3) are haptic data
+                left = samples[:, 2].astype(np.float64)
+                right = samples[:, 3].astype(np.float64)
+            else:
+                # Stereo fallback (downmixed)
+                left = samples[:, 0].astype(np.float64)
+                right = samples[:, 1].astype(np.float64) if channels >= 2 else left
 
             # Peak detection (normalized to 0-1 range for display)
             peak = max(np.max(np.abs(left)), np.max(np.abs(right))) / 32768.0
