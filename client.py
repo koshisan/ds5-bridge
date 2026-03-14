@@ -79,6 +79,9 @@ def output_receiver(sock, dev, is_bt, haptic_queue=None):
             h = data[:10].hex(" ")
             print(f"  [OUTPUT] #{out_count} {len(data)}B: {h}")
 
+        except ConnectionResetError:
+            # ICMP port unreachable from server - ignore, server may not be up yet
+            continue
         except Exception as e:
             print(f"\n  [OUTPUT] Error: {e}")
             break
@@ -150,6 +153,8 @@ def haptic_receiver(haptic_queue, dev, is_bt):
 
             print(f"  [HAPTIC] #{haptic_count} {report[:20].hex(' ')}", flush=True)
 
+        except ConnectionResetError:
+            continue
         except Exception as e:
             print(f"\n  [HAPTIC] Error: {e}")
             break
