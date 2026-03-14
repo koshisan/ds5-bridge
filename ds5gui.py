@@ -41,6 +41,7 @@ DEFAULT_CONFIG = {
     'autostart': False,
     'auto_enable_hid': True,
     'auto_capture': True,
+    'idle_timeout': 10,
 }
 
 def load_config():
@@ -82,6 +83,7 @@ class DS5Server:
         self.capture_thread = None
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.packets_sent = 0
+        self._handoff_status = 'starting...'
         self.last_peak = 0.0
         self.send_until = 0.0
 
@@ -119,6 +121,72 @@ class DS5Server:
             return result
         except Exception:
             return None
+
+
+    # --- Port Handoff ---
+    def _start_handoff(self):
+        """Background thread: standby on UDP port when driver off, load driver when client appears, unload when idle."""
+        self._handoff_running = True
+        t = threading.Thread(target=self._handoff_loop, daemon=True)
+        t.start()
+
+    def _handoff_loop(self):
+        port = 5555
+        timeout = self.config.get('idle_timeout', 10)
+
+        while getattr(self, '_handoff_running', False):
+            # Check driver status via shared memory
+            shared = self.read_shared_status()
+
+            if shared and shared['driver_active']:
+                # Driver running — monitor for idle
+                now_ms = int(time.time() * 1000)
+                idle_s = (now_ms - shared['last_seen']) / 1000.0 if shared['last_seen'] > 0 else 0
+
+                if idle_s > timeout and shared['packets_in'] > 0:
+                    print(f"[DS5] Client idle {idle_s:.0f}s > {timeout}s, unloading HID driver...")
+                    self.disable_driver(DRIVER_HWID)
+                    self._handoff_status = 'idle -> standby'
+                    time.sleep(1)
+                    continue
+
+                self._handoff_status = f'driver active, idle {idle_s:.0f}s'
+                time.sleep(1)
+                continue
+
+            # Driver not loaded — listen for client
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.settimeout(2.0)
+                sock.bind(('0.0.0.0', port))
+                self._handoff_status = f'standby on :{port}'
+                print(f"[DS5] Standby: listening on port {port}")
+
+                while getattr(self, '_handoff_running', False):
+                    try:
+                        data, addr = sock.recvfrom(1024)
+                        if len(data) >= 64:
+                            print(f"[DS5] Client {addr[0]}:{addr[1]} detected, loading HID driver...")
+                            self._handoff_status = 'loading driver...'
+                            sock.close()
+                            time.sleep(0.3)
+                            self.enable_driver(DRIVER_HWID)
+                            time.sleep(2)
+                            break
+                    except socket.timeout:
+                        continue
+                    except Exception as e:
+                        print(f"[DS5] Standby error: {e}")
+                        break
+            except OSError as e:
+                if e.errno == 10048:  # WSAEADDRINUSE
+                    self._handoff_status = 'port in use, waiting...'
+                    time.sleep(2)
+                else:
+                    print(f"[DS5] Bind error: {e}")
+                    self._handoff_status = f'error: {e}'
+                    time.sleep(5)
 
     # --- Driver Management ---
     def _get_instance_id(self, hwid):
@@ -251,6 +319,7 @@ class DS5Server:
             return
         self.capturing = True
         self.packets_sent = 0
+        self._handoff_status = 'starting...'
         self.capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
         self.capture_thread.start()
 
@@ -293,6 +362,10 @@ class DS5GUI:
         self._build_ui()
         self._update_loop()
 
+        # Start port handoff if HID auto-enable
+        if self.server.config.get('auto_enable_hid', True):
+            self.server._start_handoff()
+
         # Auto-start capture if configured
         if self.server.config.get('auto_capture', True):
             self.server.start_capture()
@@ -320,6 +393,9 @@ class DS5GUI:
 
         self.lbl_driver = ttk.Label(driver_frame, text="Driver: checking...")
         self.lbl_driver.grid(row=0, column=0, sticky='w', columnspan=2)
+
+        self.lbl_handoff = ttk.Label(driver_frame, text="Handoff: -", foreground='gray')
+        self.lbl_handoff.grid(row=3, column=0, sticky='w', columnspan=2)
 
         self.lbl_client = ttk.Label(driver_frame, text="Client: -")
         self.lbl_client.grid(row=1, column=0, sticky='w', columnspan=2)
@@ -416,6 +492,10 @@ class DS5GUI:
                 self.lbl_driver_pkts.config(text="In: 0 | Out: 0")
         except Exception:
             self.lbl_driver.config(text="Driver: no shared memory", foreground='gray')
+
+        # Handoff status
+        if hasattr(self.server, '_handoff_status'):
+            self.lbl_handoff.config(text=f"Handoff: {self.server._handoff_status}")
 
         self.root.after(1000, self._update_loop)
 
