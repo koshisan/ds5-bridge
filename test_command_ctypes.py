@@ -1,0 +1,118 @@
+"""Test DS5 SET 0x80 using direct HidD_SetFeature via ctypes."""
+import ctypes
+import ctypes.wintypes
+import time
+
+# Open DS5 via SetupAPI + CreateFile
+SetupDiGetClassDevs = ctypes.windll.setupapi.SetupDiGetClassDevsW
+SetupDiEnumDeviceInterfaces = ctypes.windll.setupapi.SetupDiEnumDeviceInterfaces
+SetupDiGetDeviceInterfaceDetailW = ctypes.windll.setupapi.SetupDiGetDeviceInterfaceDetailW
+SetupDiDestroyDeviceInfoList = ctypes.windll.setupapi.SetupDiDestroyDeviceInfoList
+
+DIGCF_PRESENT = 0x02
+DIGCF_DEVICEINTERFACE = 0x10
+GUID_DEVINTERFACE_HID = ctypes.c_byte * 16
+
+import struct
+
+# HID GUID: {4D1E55B2-F16F-11CF-88CB-001111000030}
+class GUID(ctypes.Structure):
+    _fields_ = [("Data1", ctypes.c_ulong), ("Data2", ctypes.c_ushort),
+                ("Data3", ctypes.c_ushort), ("Data4", ctypes.c_ubyte * 8)]
+
+HID_GUID = GUID(0x4D1E55B2, 0xF16F, 0x11CF, 
+                (ctypes.c_ubyte * 8)(0x88, 0xCB, 0x00, 0x11, 0x11, 0x00, 0x00, 0x30))
+
+class SP_DEVICE_INTERFACE_DATA(ctypes.Structure):
+    _fields_ = [("cbSize", ctypes.c_ulong), ("InterfaceClassGuid", GUID),
+                ("Flags", ctypes.c_ulong), ("Reserved", ctypes.POINTER(ctypes.c_ulong))]
+
+# Find DS5 HID device path
+hdev_info = SetupDiGetClassDevs(ctypes.byref(HID_GUID), None, None, 
+                                 DIGCF_PRESENT | DIGCF_DEVICEINTERFACE)
+
+ds5_path = None
+for idx in range(100):
+    iface_data = SP_DEVICE_INTERFACE_DATA()
+    iface_data.cbSize = ctypes.sizeof(SP_DEVICE_INTERFACE_DATA)
+    if not SetupDiEnumDeviceInterfaces(hdev_info, None, ctypes.byref(HID_GUID), idx, ctypes.byref(iface_data)):
+        break
+    
+    # Get required size
+    required = ctypes.c_ulong(0)
+    SetupDiGetDeviceInterfaceDetailW(hdev_info, ctypes.byref(iface_data), None, 0, ctypes.byref(required), None)
+    
+    # Allocate and get detail
+    class SP_DEVICE_INTERFACE_DETAIL_DATA(ctypes.Structure):
+        _fields_ = [("cbSize", ctypes.c_ulong), ("DevicePath", ctypes.c_wchar * (required.value // 2))]
+    
+    detail = SP_DEVICE_INTERFACE_DETAIL_DATA()
+    detail.cbSize = 8  # sizeof on 64-bit
+    if SetupDiGetDeviceInterfaceDetailW(hdev_info, ctypes.byref(iface_data), ctypes.byref(detail), required, None, None):
+        path = detail.DevicePath
+        if "054c" in path.lower() and "0ce6" in path.lower():
+            print(f"Found DS5: {path}")
+            ds5_path = path
+            # Take the first one (might need to filter for the right collection)
+
+SetupDiDestroyDeviceInfoList(hdev_info)
+
+if not ds5_path:
+    print("DS5 not found!")
+    exit(1)
+
+# Open device
+GENERIC_READ = 0x80000000
+GENERIC_WRITE = 0x40000000
+FILE_SHARE_READ = 1
+FILE_SHARE_WRITE = 2
+OPEN_EXISTING = 3
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+handle = ctypes.windll.kernel32.CreateFileW(
+    ds5_path, GENERIC_READ | GENERIC_WRITE,
+    FILE_SHARE_READ | FILE_SHARE_WRITE, None, OPEN_EXISTING, 0, None)
+
+if handle == INVALID_HANDLE_VALUE:
+    err = ctypes.GetLastError()
+    print(f"CreateFile failed: {err}")
+    exit(1)
+
+print(f"Opened handle: {handle}")
+
+# HidD_SetFeature / HidD_GetFeature
+HidD_SetFeature = ctypes.windll.hid.HidD_SetFeature
+HidD_SetFeature.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong]
+HidD_SetFeature.restype = ctypes.c_bool
+
+HidD_GetFeature = ctypes.windll.hid.HidD_GetFeature
+HidD_GetFeature.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong]
+HidD_GetFeature.restype = ctypes.c_bool
+
+# SET 0x80
+buf = (ctypes.c_ubyte * 64)()
+buf[0] = 0x80
+buf[1] = 0x09  # SYSTEM
+buf[2] = 0x02  # READ_PCBAID
+print(f"\nHidD_SetFeature 0x80 [0x09, 0x02]...")
+ok = HidD_SetFeature(handle, buf, 64)
+print(f"Result: {ok}, LastError: {ctypes.GetLastError()}")
+
+# Poll GET 0x81
+for i in range(30):
+    time.sleep(0.01)
+    rbuf = (ctypes.c_ubyte * 64)()
+    rbuf[0] = 0x81
+    ok = HidD_GetFeature(handle, rbuf, 64)
+    data = bytes(rbuf)
+    if data[1] == 0x09 and data[2] == 0x02:
+        print(f"Poll {i}: MATCH! status={data[3]:#04x} data={data[:20].hex(' ')}")
+        break
+    elif any(b != 0 for b in data[1:]):
+        if i < 3:
+            print(f"Poll {i}: {data[:20].hex(' ')}")
+    else:
+        if i == 0:
+            print(f"Poll {i}: zeros")
+
+ctypes.windll.kernel32.CloseHandle(handle)
