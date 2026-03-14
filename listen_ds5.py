@@ -1,10 +1,10 @@
-"""Listen to DualSense virtual speaker - WASAPI loopback."""
+"""Listen to DualSense virtual speaker - WASAPI loopback with forced 4ch."""
 import comtypes
 comtypes.CoInitialize()
 
 from comtypes import CLSCTX_ALL, GUID, HRESULT, COMMETHOD, IUnknown
 import ctypes
-from ctypes import POINTER, byref, cast, c_uint32, c_void_p
+from ctypes import POINTER, byref, c_uint32, c_void_p
 from pycaw.pycaw import AudioUtilities
 import numpy as np
 import sys
@@ -32,6 +32,7 @@ class WAVEFORMATEXTENSIBLE(ctypes.Structure):
 AUDCLNT_STREAMFLAGS_LOOPBACK = 0x00020000
 AUDCLNT_SHAREMODE_SHARED = 0
 REFTIMES_PER_SEC = 10000000
+KSDATAFORMAT_SUBTYPE_PCM = GUID('{00000001-0000-0010-8000-00aa00389b71}')
 
 IID_IAudioClient = GUID('{1CB9AD4C-DBFA-4c32-B178-C2F568A703B2}')
 IID_IAudioCaptureClient = GUID('{C8ADBD64-E71E-48a0-A4DE-185C395CD317}')
@@ -86,7 +87,7 @@ class IAudioCaptureClient(IUnknown):
             (['out', 'retval'], POINTER(c_uint32), 'pNumFramesInNextPacket')),
     ]
 
-# Find DualSense via pycaw (simple device enumeration)
+# Find DualSense
 devices = AudioUtilities.GetAllDevices()
 ds5 = None
 for d in devices:
@@ -95,39 +96,64 @@ for d in devices:
         print(f"Found: {d.FriendlyName}")
         break
 
-if ds5 is None:
+if not ds5:
     print("DualSense not found!")
     sys.exit(1)
 
-# Get IMMDevice directly from pycaw device
 imm_device = ds5._dev
-
-# Activate as IAudioClient
 punk = imm_device.Activate(IID_IAudioClient, CLSCTX_ALL, None)
 audio_client = punk.QueryInterface(IAudioClient)
 
-# Get mix format
-pp_format = audio_client.GetMixFormat()
-fmt = pp_format.contents
-print(f"\nMix format: ch={fmt.nChannels} rate={fmt.nSamplesPerSec} bps={fmt.wBitsPerSample} align={fmt.nBlockAlign}")
+# Get mix format to see what Windows thinks
+mix_fmt = audio_client.GetMixFormat()
+print(f"Mix format: ch={mix_fmt.contents.nChannels} (we'll force 4ch)")
 
-if fmt.cbSize >= 22:
-    ext = cast(pp_format, POINTER(WAVEFORMATEXTENSIBLE)).contents
-    print(f"  validBps={ext.wValidBitsPerSample} mask=0x{ext.dwChannelMask:X}")
+# Build explicit 4ch format
+fmt = WAVEFORMATEXTENSIBLE()
+fmt.Format.wFormatTag = 0xFFFE  # WAVE_FORMAT_EXTENSIBLE
+fmt.Format.nChannels = 4
+fmt.Format.nSamplesPerSec = 48000
+fmt.Format.wBitsPerSample = 32
+fmt.Format.nBlockAlign = 4 * 4  # 4ch * 4 bytes
+fmt.Format.nAvgBytesPerSec = 48000 * 16
+fmt.Format.cbSize = 22
+fmt.wValidBitsPerSample = 32
+fmt.dwChannelMask = 0x33  # KSAUDIO_SPEAKER_QUAD
+fmt.SubFormat = KSDATAFORMAT_SUBTYPE_PCM
 
-channels = fmt.nChannels
-rate = fmt.nSamplesPerSec
+# Initialize with our 4ch format + loopback flag
+try:
+    audio_client.Initialize(
+        AUDCLNT_SHAREMODE_SHARED,
+        AUDCLNT_STREAMFLAGS_LOOPBACK,
+        REFTIMES_PER_SEC, 0,
+        ctypes.cast(byref(fmt), POINTER(WAVEFORMATEX)),
+        None
+    )
+    print("Initialized with 4ch loopback!")
+except Exception as e:
+    print(f"4ch init failed: {e}")
+    print("Falling back to mix format (2ch)...")
+    # Need new IAudioClient for retry
+    punk = imm_device.Activate(IID_IAudioClient, CLSCTX_ALL, None)
+    audio_client = punk.QueryInterface(IAudioClient)
+    audio_client.Initialize(
+        AUDCLNT_SHAREMODE_SHARED,
+        AUDCLNT_STREAMFLAGS_LOOPBACK,
+        REFTIMES_PER_SEC, 0,
+        mix_fmt,
+        None
+    )
+    fmt.Format.nChannels = mix_fmt.contents.nChannels
+    print(f"Initialized with {mix_fmt.contents.nChannels}ch loopback")
 
-# Initialize loopback
-audio_client.Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
-                        REFTIMES_PER_SEC, 0, pp_format, None)
+channels = fmt.Format.nChannels
 
 # Get capture client
-capture_ptr = c_void_p()
-audio_client.GetService(byref(IID_IAudioCaptureClient), byref(capture_ptr))
+capture_ptr = audio_client.GetService(byref(IID_IAudioCaptureClient))
 capture_client = ctypes.cast(capture_ptr, POINTER(IAudioCaptureClient)).contents
 
-print(f"\nLoopback active: {channels}ch, {rate}Hz")
+print(f"\nLoopback active: {channels}ch, 48000Hz")
 if channels >= 4:
     print("CH1=FL  CH2=FR  CH3=RL(haptic)  CH4=RR(haptic)")
 print("Press Ctrl+C to stop.\n")
@@ -137,10 +163,9 @@ audio_client.Start()
 try:
     while True:
         time.sleep(0.01)
-        packet_size = c_uint32()
-        capture_client.GetNextPacketSize(byref(packet_size))
+        packet_size = capture_client.GetNextPacketSize()
 
-        while packet_size.value > 0:
+        while packet_size > 0:
             data_ptr = c_void_p()
             frames = c_uint32()
             flags = c_uint32()
@@ -162,7 +187,7 @@ try:
                     print(f"\r{'|'.join(parts)}", end="", flush=True)
 
             capture_client.ReleaseBuffer(frames.value)
-            capture_client.GetNextPacketSize(byref(packet_size))
+            packet_size = capture_client.GetNextPacketSize()
 
 except KeyboardInterrupt:
     print("\nStopped.")
