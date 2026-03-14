@@ -68,6 +68,20 @@ class DS5Server:
         self.last_peak = 0.0
         self.send_until = 0.0
         self.icon = None
+        self._hid_enabled = False
+        self._audio_enabled = False
+        self._status_lock = threading.Lock()
+        self._refresh_status()
+
+    def _refresh_status(self):
+        """Refresh driver status in background."""
+        def _do():
+            hid = self.is_driver_enabled(DRIVER_HWID)
+            audio = self.is_driver_enabled(AUDIO_HWID)
+            with self._status_lock:
+                self._hid_enabled = hid
+                self._audio_enabled = audio
+        threading.Thread(target=_do, daemon=True).start()
 
     # --- Driver Management ---
     def _run_elevated(self, cmd):
@@ -267,13 +281,13 @@ class DS5Server:
                 self._toggle_capture),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
-                lambda text: f'HID Driver [{"ON" if self.is_driver_enabled(DRIVER_HWID) else "OFF"}]',
+                lambda text: f'HID Driver [{"ON" if self._hid_enabled else "OFF"}]',
                 pystray.Menu(
                     pystray.MenuItem('Enable', lambda: self._set_driver(DRIVER_HWID, True)),
                     pystray.MenuItem('Disable', lambda: self._set_driver(DRIVER_HWID, False)),
                 )),
             pystray.MenuItem(
-                lambda text: f'Audio Driver [{"ON" if self.is_driver_enabled(AUDIO_HWID) else "OFF"}]',
+                lambda text: f'Audio Driver [{"ON" if self._audio_enabled else "OFF"}]',
                 pystray.Menu(
                     pystray.MenuItem('Enable', lambda: self._set_driver(AUDIO_HWID, True)),
                     pystray.MenuItem('Disable', lambda: self._set_driver(AUDIO_HWID, False)),
@@ -319,6 +333,7 @@ class DS5Server:
         else:
             ok, msg = self.disable_driver(hwid)
         print(f"[DS5Server] {'Enable' if enable else 'Disable'} {hwid}: {ok} - {msg.strip()}")
+        self._refresh_status()
 
     def _set_gain(self, val):
         self.config['gain'] = float(val)
@@ -341,7 +356,7 @@ class DS5Server:
             'DS5Bridge',
             self._create_icon('yellow'),
             'DS5 Bridge Server',
-            menu=self._build_menu
+            menu=self._build_menu()
         )
 
         # Auto-start capture
