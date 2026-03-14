@@ -107,8 +107,7 @@ punk = imm_device.Activate(IID_IAudioClient, CLSCTX_ALL, None)
 audio_client = punk.QueryInterface(IAudioClient)
 
 # Get mix format
-pp_format = POINTER(WAVEFORMATEX)()
-audio_client.GetMixFormat(byref(pp_format))
+pp_format = audio_client.GetMixFormat()
 fmt = pp_format.contents
 print(f"\nMix format: ch={fmt.nChannels} rate={fmt.nSamplesPerSec} bps={fmt.wBitsPerSample} align={fmt.nBlockAlign}")
 
