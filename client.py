@@ -85,6 +85,10 @@ def haptic_receiver(haptic_sock, dev, is_bt):
     haptic_count = 0
     seq = 0
 
+    REPORT_ID = 0x32
+    REPORT_SIZE = 141
+    SAMPLE_SIZE = 64
+
     if not is_bt:
         print("  [HAPTIC] Skipping - USB connection, haptics only work over BT")
         return
@@ -100,38 +104,47 @@ def haptic_receiver(haptic_sock, dev, is_bt):
             audio_seq = data[1]
             audio_samples = data[2:66]  # 64 bytes of audio (32 stereo samples)
 
-            if len(audio_samples) < 64:
-                audio_samples = audio_samples + bytes(64 - len(audio_samples))
+            if len(audio_samples) < SAMPLE_SIZE:
+                audio_samples = audio_samples + bytes(SAMPLE_SIZE - len(audio_samples))
 
-            # Build BT Report 0x32 (141 bytes)
-            # [0]=0x32 [1]=tag(4)|seq(4) [2-10]=Packet 0x11 (control, 9B)
-            # [11-76]=Packet 0x12 (audio, 2+64B) [77-136]=padding [137-140]=CRC32
-            bt_out = bytearray(141)
-            bt_out[0] = 0x32
+            # Build Report 0x32 using proven format from haptic_demo.py
+            payload_size = REPORT_SIZE - 1 - 4  # 136 bytes (minus report_id and crc)
 
-            # Tag nibble (0x4) | Sequence nibble
-            bt_out[1] = 0x40 | (seq & 0x0F)
+            # Packet 0x11: control (pid=0x11, sized=1, length=7)
+            pkt_0x11 = bytes([
+                (0x11 & 0x3F) | (0 << 6) | (1 << 7),  # pid=0x11, unk=0, sized=1
+                7,  # length
+                0b11111110, 0, 0, 0, 0, seq & 0xFF, 0  # data (7 bytes)
+            ])
 
-            # Packet 0x11: Control packet (9 bytes, all zero = no changes)
-            bt_out[2] = 0x11
-            # bytes 3-10 = zeros (no control changes)
+            # Packet 0x12: audio samples (pid=0x12, sized=1, length=64)
+            pkt_0x12_header = bytes([
+                (0x12 & 0x3F) | (0 << 6) | (1 << 7),  # pid=0x12, unk=0, sized=1
+                SAMPLE_SIZE,  # length
+            ])
 
-            # Packet 0x12: Audio packet
-            bt_out[11] = 0x12
-            bt_out[12] = 0x00  # Sub-type / flags
+            # Build payload
+            packets = pkt_0x11 + pkt_0x12_header + bytes(audio_samples)
+            payload = packets.ljust(payload_size, b'\x00')
 
-            # Audio samples (64 bytes = 32 stereo samples, 8-bit unsigned)
-            bt_out[13:13+64] = audio_samples
+            # Tag=0, seq in upper nibble
+            tag_seq = (seq & 0x0F) << 4
 
-            # CRC32 over bytes 0..136, seed 0xA2
-            crc = ds5_bt_crc32(bytes(bt_out[:137]))
-            struct.pack_into('<I', bt_out, 137, crc)
+            report_body = bytes([tag_seq]) + payload
 
-            dev.write(bytes(bt_out))
+            # CRC32 over report_id + body
+            crc_data = bytes([REPORT_ID]) + report_body
+            crc = ds5_bt_crc32(crc_data)
+
+            # Final report
+            report = bytes([REPORT_ID]) + report_body + struct.pack('<I', crc)
+            dev.write(report)
+
             seq = (seq + 1) & 0x0F
             haptic_count += 1
 
-            print(f"  [HAPTIC] #{haptic_count} seq={audio_seq} {len(audio_samples)}B", flush=True)
+            if haptic_count % 100 == 0:
+                print(f"\r  [HAPTIC] {haptic_count} packets sent    ", end="", flush=True)
 
         except Exception as e:
             print(f"\n  [HAPTIC] Error: {e}")
