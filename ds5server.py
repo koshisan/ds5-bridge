@@ -72,23 +72,6 @@ class DS5Server:
         self._audio_enabled = False
         self._status_lock = threading.Lock()
         self._refresh_status()
-        self._shared_info = 'no driver data'
-        self._start_shared_poller()
-
-    def _start_shared_poller(self):
-        def poll():
-            while True:
-                try:
-                    s = self.read_shared_status()
-                    if s and s['driver_active']:
-                        self._shared_info = f'{s["client_ip"]}:{s["client_port"]} in:{s["packets_in"]}'
-                    else:
-                        self._shared_info = 'driver inactive'
-                except Exception:
-                    self._shared_info = 'no driver data'
-                time.sleep(2)
-        t = threading.Thread(target=poll, daemon=True)
-        t.start()
 
     def _refresh_status(self):
         """Refresh driver status in background."""
@@ -99,55 +82,6 @@ class DS5Server:
                 self._hid_enabled = hid
                 self._audio_enabled = audio
         threading.Thread(target=_do, daemon=True).start()
-
-
-    # --- Shared Memory (driver status) ---
-    def read_shared_status(self):
-        """Read driver status from shared memory. Returns None if unavailable."""
-        try:
-            import ctypes
-            handle = ctypes.windll.kernel32.OpenFileMappingW(
-                0x0004, False, "Global\\DS5VirtualStatus")
-            if not handle:
-                return None
-
-            class DS5Status(ctypes.Structure):
-                _pack_ = 1
-                _fields_ = [
-                    ('version', ctypes.c_uint32),
-                    ('size', ctypes.c_uint32),
-                    ('udp_port', ctypes.c_uint16),
-                    ('client_ip', ctypes.c_uint8 * 4),
-                    ('client_port', ctypes.c_uint16),
-                    ('last_seen', ctypes.c_int64),
-                    ('packets_in', ctypes.c_uint32),
-                    ('packets_out', ctypes.c_uint32),
-                    ('driver_active', ctypes.c_uint8),
-                    ('reserved', ctypes.c_uint8 * 32),
-                ]
-
-            ptr = ctypes.windll.kernel32.MapViewOfFile(
-                handle, 0x0004, 0, 0, ctypes.sizeof(DS5Status))
-            if not ptr:
-                ctypes.windll.kernel32.CloseHandle(handle)
-                return None
-
-            status = DS5Status.from_address(ptr)
-            result = {
-                'version': status.version,
-                'udp_port': status.udp_port,
-                'client_ip': f'{status.client_ip[0]}.{status.client_ip[1]}.{status.client_ip[2]}.{status.client_ip[3]}',
-                'client_port': status.client_port,
-                'last_seen': status.last_seen,
-                'packets_in': status.packets_in,
-                'packets_out': status.packets_out,
-                'driver_active': bool(status.driver_active),
-            }
-            ctypes.windll.kernel32.UnmapViewOfFile(ptr)
-            ctypes.windll.kernel32.CloseHandle(handle)
-            return result
-        except Exception:
-            return None
 
     # --- Driver Management ---
     def _run_elevated(self, cmd):
@@ -242,14 +176,8 @@ class DS5Server:
 
             # Parse S16 interleaved samples
             samples = np.frombuffer(in_data, dtype=np.int16).reshape(-1, channels)
-            if channels >= 4:
-                # Channels 3+4 (index 2+3) are haptic data
-                left = samples[:, 2].astype(np.float64)
-                right = samples[:, 3].astype(np.float64)
-            else:
-                # Stereo fallback (downmixed)
-                left = samples[:, 0].astype(np.float64)
-                right = samples[:, 1].astype(np.float64) if channels >= 2 else left
+            left = samples[:, 0].astype(np.float64)
+            right = samples[:, 1].astype(np.float64) if channels >= 2 else left
 
             # Peak detection (normalized to 0-1 range for display)
             peak = max(np.max(np.abs(left)), np.max(np.abs(right))) / 32768.0
@@ -339,15 +267,6 @@ class DS5Server:
             print(f"[DS5Server] Autostart error: {e}")
 
     # --- Tray Icon ---
-    def _status_line(self):
-        try:
-            shared = self.read_shared_status()
-            if shared and shared['driver_active']:
-                return f'Driver: ON | Client: {shared["client_ip"]}:{shared["client_port"]}'
-        except Exception:
-            pass
-        return f'Client: {self.config["client_ip"]}'
-
     def _create_icon(self, color='green'):
         img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
@@ -362,7 +281,7 @@ class DS5Server:
     def _build_menu(self):
         return pystray.Menu(
             pystray.MenuItem(
-                lambda text: f'Client: {self.config["client_ip"]} | {self._shared_info}', None, enabled=False),
+                lambda text: f'Client: {self.config["client_ip"]}', None, enabled=False),
             pystray.MenuItem(
                 lambda text: f'Packets: {self.packets_sent} | Peak: {self.last_peak:.4f}', None, enabled=False),
             pystray.Menu.SEPARATOR,
@@ -424,23 +343,6 @@ class DS5Server:
             ok, msg = self.disable_driver(hwid)
         print(f"[DS5Server] {'Enable' if enable else 'Disable'} {hwid}: {ok} - {msg.strip()}")
         self._refresh_status()
-        self._shared_info = 'no driver data'
-        self._start_shared_poller()
-
-    def _start_shared_poller(self):
-        def poll():
-            while True:
-                try:
-                    s = self.read_shared_status()
-                    if s and s['driver_active']:
-                        self._shared_info = f'{s["client_ip"]}:{s["client_port"]} in:{s["packets_in"]}'
-                    else:
-                        self._shared_info = 'driver inactive'
-                except Exception:
-                    self._shared_info = 'no driver data'
-                time.sleep(2)
-        t = threading.Thread(target=poll, daemon=True)
-        t.start()
 
     def _set_gain(self, val):
         self.config['gain'] = float(val)
