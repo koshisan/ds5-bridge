@@ -92,7 +92,7 @@ def callback(in_data, frame_count, time_info, status):
         sample_buffer.append(float_to_uint8(right_ds[i]))
 
     # Send packets only if there's actual audio signal
-    if peak > 0.005:
+    if peak > 0.009:
         while len(sample_buffer) >= DS5_SAMPLES_PER_PACKET * 2:
             send_haptic_packet()
     else:
