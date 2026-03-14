@@ -534,6 +534,11 @@ class DS5GUI:
         if hasattr(self.server, '_handoff_status'):
             self.lbl_handoff.config(text=f"Handoff: {self.server._handoff_status}")
 
+        # Refresh driver status every 5 seconds
+        self._update_count = getattr(self, '_update_count', 0) + 1
+        if self._update_count % 5 == 0:
+            self._refresh_drivers()
+
         self.root.after(1000, self._update_loop)
 
     def _driver_action(self, hwid, enable):
