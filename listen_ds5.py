@@ -83,14 +83,16 @@ def callback(in_data, frame_count, time_info, status):
     else:
         left = right = data[:, 0]
 
-    # Decimation with anti-aliasing filter
-    from scipy.signal import decimate as sci_decimate
-    if len(left) >= downsample_ratio:
-        left_ds = sci_decimate(left, downsample_ratio, ftype='fir', zero_phase=False)
-        right_ds = sci_decimate(right, downsample_ratio, ftype='fir', zero_phase=False)
-        for i in range(len(left_ds)):
-            sample_buffer.append(float_to_uint8(left_ds[i]))
-            sample_buffer.append(float_to_uint8(right_ds[i]))
+    # Downsample: use peak amplitude per block (preserves haptic energy)
+    n_blocks = len(left) // downsample_ratio
+    for i in range(n_blocks):
+        s = i * downsample_ratio
+        e = s + downsample_ratio
+        # Use peak value in block (not mean, not single sample)
+        l_peak = left[s:e][np.argmax(np.abs(left[s:e]))]
+        r_peak = right[s:e][np.argmax(np.abs(right[s:e]))]
+        sample_buffer.append(float_to_uint8(l_peak))
+        sample_buffer.append(float_to_uint8(r_peak))
 
     # Calculate peak for gate and display
     peak = max(np.max(np.abs(left)), np.max(np.abs(right)))
