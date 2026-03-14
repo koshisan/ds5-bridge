@@ -155,10 +155,50 @@ if ok:
 
     # Use DeviceIoControl with IOCTL_HID_SET_FEATURE (like Chromium!)
     IOCTL_HID_SET_FEATURE = 0x000b0197
-    buf = (ctypes.c_ubyte * flen)()
-    buf[0] = 0x80
-    buf[1] = 0x09
-    buf[2] = 0x02
+    # Try multiple sizes
+    for sz in [64, flen]:
+        buf = (ctypes.c_ubyte * sz)()
+        buf[0] = 0x80
+        buf[1] = 0x09
+        buf[2] = 0x02
+
+        overlapped = OVERLAPPED()
+        event = ctypes.windll.kernel32.CreateEventW(None, True, False, None)
+        overlapped.hEvent = event
+
+        ctypes.windll.kernel32.SetLastError(0)
+        bytesReturned = ctypes.c_ulong(0)
+        ok = ctypes.windll.kernel32.DeviceIoControl(
+            handle, IOCTL_HID_SET_FEATURE,
+            buf, sz,
+            None, 0,
+            ctypes.byref(bytesReturned),
+            ctypes.byref(overlapped))
+        err = ctypes.GetLastError()
+        if not ok and err == 997:
+            ctypes.windll.kernel32.WaitForSingleObject(event, 5000)
+            ok2 = ctypes.windll.kernel32.GetOverlappedResult(
+                handle, ctypes.byref(overlapped), ctypes.byref(bytesReturned), False)
+            err2 = ctypes.GetLastError()
+            print(f"DeviceIoControl SET size={sz}: PENDING -> ok={ok2} err={err2}")
+        else:
+            print(f"DeviceIoControl SET size={sz}: ok={ok} err={err}")
+        ctypes.windll.kernel32.CloseHandle(event)
+
+        if ok or (not ok and err == 997):
+            # Poll 0x81
+            time.sleep(0.05)
+            for i in range(30):
+                time.sleep(0.02)
+                rbuf = (ctypes.c_ubyte * flen)()
+                rbuf[0] = 0x81
+                HidD_GetFeature(handle, rbuf, flen)
+                data = bytes(rbuf)
+                if any(b != 0 for b in data[1:6]):
+                    print(f"  Poll {i}: {data[:32].hex(' ')}")
+                    break
+            else:
+                print(f"  -> 0x81 still zeros after 30 polls")
 
     class OVERLAPPED(ctypes.Structure):
         _fields_ = [("Internal", ctypes.c_void_p), ("InternalHigh", ctypes.c_void_p),
@@ -188,22 +228,5 @@ if ok:
         err2 = ctypes.GetLastError()
         print(f"GetOverlappedResult: ok={ok2} err={err2} bytes={bytesReturned.value}")
 
-    # Now poll 0x81 using HidD_GetFeature (which works correctly)
-    print("\nPolling 0x81 with HidD_GetFeature (547B buffer)...")
-    for i in range(50):
-        time.sleep(0.02)
-        rbuf = (ctypes.c_ubyte * flen)()
-        rbuf[0] = 0x81
-        ok = HidD_GetFeature(handle, rbuf, flen)
-        data = bytes(rbuf)
-        if any(b != 0 for b in data[1:]):
-            print(f"Poll {i}: {data[:32].hex(' ')}")
-            if data[1] == 0x09 and data[2] == 0x02:
-                print(f"  -> MATCH subcmd! status={data[3]:#04x}")
-                print(f"  -> Full: {data.hex(' ')}")
-                break
-        elif i < 3 or i == 49:
-            print(f"Poll {i}: all zeros")
 
-    ctypes.windll.kernel32.CloseHandle(event)
     ctypes.windll.kernel32.CloseHandle(handle)
