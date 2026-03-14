@@ -35,7 +35,7 @@ def ds5_bt_crc32(data):
     return zlib.crc32(bytes([0xA2]) + data) & 0xFFFFFFFF
 
 
-def output_receiver(sock, dev, is_bt):
+def output_receiver(sock, dev, is_bt, haptic_queue=None):
     """Receive output reports from host and write to real DS5."""
     out_count = 0
     seq = 0
@@ -44,6 +44,11 @@ def output_receiver(sock, dev, is_bt):
         try:
             data, addr = sock.recvfrom(256)
             if len(data) < 2:
+                continue
+
+            # Route 0x32 haptic packets to haptic handler
+            if data[0] == 0x32 and haptic_queue is not None:
+                haptic_queue.put((data, addr))
                 continue
 
             if is_bt:
@@ -80,7 +85,7 @@ def output_receiver(sock, dev, is_bt):
 
 
 
-def haptic_receiver(haptic_sock, dev, is_bt):
+def haptic_receiver(haptic_queue, dev, is_bt):
     """Receive haptic audio packets and send as BT Report 0x32."""
     haptic_count = 0
     seq = 0
@@ -93,12 +98,11 @@ def haptic_receiver(haptic_sock, dev, is_bt):
         print("  [HAPTIC] Skipping - USB connection, haptics only work over BT")
         return
 
-    print(f"  [HAPTIC] Listening on port {haptic_sock.getsockname()[1]}")
+    print(f"  [HAPTIC] Listening on main UDP socket")
 
     while True:
         try:
-            data, addr = haptic_sock.recvfrom(256)
-            print(f"  [HAPTIC] recv {len(data)}B from {addr} first=0x{data[0]:02X}", flush=True)
+            data, addr = haptic_queue.get()
             if len(data) < 2 or data[0] != 0x32:
                 continue
 
@@ -193,12 +197,10 @@ def main():
                                   daemon=True)
     out_thread.start()
 
-    # Haptic audio receiver (port 5556)
-    haptic_port = args.port + 1  # 5556 by default
-    haptic_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    haptic_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    haptic_sock.bind(("0.0.0.0", haptic_port))
-    haptic_thread = threading.Thread(target=haptic_receiver, args=(haptic_sock, dev, is_bt),
+    # Haptic audio receiver (shared queue from output_receiver)
+    import queue
+    haptic_q = queue.Queue()
+    haptic_thread = threading.Thread(target=haptic_receiver, args=(haptic_q, dev, is_bt),
                                      daemon=True)
     haptic_thread.start()
 
