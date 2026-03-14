@@ -103,11 +103,13 @@ for i in range(collection.GetCount()):
     dev = collection.Item(i)
     from pycaw.pycaw import IMMEndpoint
     props = dev.OpenPropertyStore(0)
-    from comtypes import PROPERTYKEY
-    PKEY_Device_FriendlyName = PROPERTYKEY()
-    PKEY_Device_FriendlyName.fmtid = GUID('{A45C254E-DF1C-4EFD-8020-67D146A850E0}')
-    PKEY_Device_FriendlyName.pid = 14
-    name = props.GetValue(PKEY_Device_FriendlyName)
+    # PROPERTYKEY struct
+    class PROPERTYKEY(ctypes.Structure):
+        _fields_ = [('fmtid', comtypes.GUID), ('pid', ctypes.c_ulong)]
+    pk = PROPERTYKEY()
+    pk.fmtid = GUID('{A45C254E-DF1C-4EFD-8020-67D146A850E0}')
+    pk.pid = 14
+    name = props.GetValue(pk)
     fname = str(name)
     if '2- DualSense' in fname or '2-DualSense' in fname:
         imm_device = dev
