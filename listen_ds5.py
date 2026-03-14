@@ -1,71 +1,82 @@
-import pyaudiowpatch as pyaudio
+"""Listen to DualSense virtual speaker via WASAPI loopback (4ch)."""
+import comtypes
 import numpy as np
 import time
+import sys
 
-p = pyaudio.PyAudio()
+# Initialize COM
+comtypes.CoInitialize()
 
-# Find DualSense speaker loopback
+from comtypes import CLSCTX_ALL
+from pycaw.pycaw import AudioUtilities, IMMDeviceEnumerator, EDataFlow, ERole
+from pycaw.constants import CLSID_MMDeviceEnumerator
+import ctypes
+
+# Find DualSense output device
+devices = AudioUtilities.GetAllDevices()
 ds5_dev = None
-for i in range(p.get_device_count()):
-    info = p.get_device_info_by_index(i)
-    name = info['name']
-    if ('2- DualSense' in name or '2-DualSense' in name) and 'Loopback' in name:
-        ds5_dev = info
-        print(f"Found loopback: [{i}] {name} ch={info['maxInputChannels']}")
+for d in devices:
+    if d.FriendlyName and ('2- DualSense' in d.FriendlyName or '2-DualSense' in d.FriendlyName):
+        ds5_dev = d
+        print(f"Found: {d.FriendlyName} (id: {d.id})")
         break
 
 if ds5_dev is None:
-    print("DualSense loopback not found!")
-    p.terminate()
-    exit(1)
+    print("DualSense speaker not found!")
+    print("Available devices:")
+    for d in devices:
+        if d.FriendlyName:
+            print(f"  {d.FriendlyName}")
+    sys.exit(1)
 
-# Force 4 channels even if device reports 2
-channels = 4
-rate = int(ds5_dev['defaultSampleRate'])
-print(f"\nListening on: {ds5_dev['name']} (index {ds5_dev['index']})")
-print(f"  Channels: {channels} (forced), Rate: {rate}")
-print("Start Genshin now! Press Ctrl+C to stop.\n")
-print("  CH1=FL  CH2=FR  CH3=RL(haptic?)  CH4=RR(haptic?)\n")
+# Use WASAPI loopback capture via IAudioClient
+from comtypes import GUID
+import wave
+import struct
 
-def callback(in_data, frame_count, time_info, status):
-    data = np.frombuffer(in_data, dtype=np.float32).reshape(-1, channels)
-    peaks = [np.max(np.abs(data[:, ch])) for ch in range(channels)]
-    if max(peaks) > 0.001:
-        bars = ['#' * int(min(p, 1.0) * 15) for p in peaks]
-        print(f"\rCH1:{peaks[0]:.3f} {bars[0]:15s} | CH2:{peaks[1]:.3f} {bars[1]:15s} | CH3:{peaks[2]:.3f} {bars[2]:15s} | CH4:{peaks[3]:.3f} {bars[3]:15s}", end="", flush=True)
-    return (None, pyaudio.paContinue)
+# Get the IMMDevice
+enumerator = comtypes.CoCreateInstance(
+    CLSID_MMDeviceEnumerator,
+    IMMDeviceEnumerator,
+    CLSCTX_ALL
+)
 
-try:
-    stream = p.open(
-        format=pyaudio.paFloat32,
-        channels=channels,
-        rate=rate,
-        input=True,
-        input_device_index=ds5_dev['index'],
-        frames_per_buffer=512,
-        stream_callback=callback
-    )
-except Exception as e:
-    print(f"Failed to open 4ch: {e}")
-    print("Trying 2ch fallback...")
-    channels = 2
-    stream = p.open(
-        format=pyaudio.paFloat32,
-        channels=channels,
-        rate=rate,
-        input=True,
-        input_device_index=ds5_dev['index'],
-        frames_per_buffer=512,
-        stream_callback=callback
-    )
+# Enumerate render devices to find ours
+from pycaw.pycaw import IMMDeviceCollection
+collection = enumerator.EnumAudioEndpoints(EDataFlow.eRender.value, 0x00000001)  # DEVICE_STATE_ACTIVE
+count = collection.GetCount()
 
-stream.start_stream()
-try:
-    while stream.is_active():
-        time.sleep(0.1)
-except KeyboardInterrupt:
-    print("\nStopped.")
+imm_device = None
+for i in range(count):
+    dev = collection.Item(i)
+    dev_id = dev.GetId()
+    if ds5_dev.id in dev_id or dev_id in ds5_dev.id:
+        imm_device = dev
+        print(f"Matched IMMDevice: {dev_id}")
+        break
 
-stream.stop_stream()
-stream.close()
-p.terminate()
+if imm_device is None:
+    print("Could not find IMMDevice!")
+    sys.exit(1)
+
+# Get mix format
+from pycaw.pycaw import IAudioClient
+audio_client = imm_device.Activate(IAudioClient._iid_, CLSCTX_ALL, None)
+
+# Get the mix format (what the device actually uses)
+mix_format = audio_client.GetMixFormat()
+fmt = mix_format.contents
+print(f"\nDevice mix format:")
+print(f"  Channels: {fmt.nChannels}")
+print(f"  SampleRate: {fmt.nSamplesPerSec}")
+print(f"  BitsPerSample: {fmt.wBitsPerSample}")
+print(f"  BlockAlign: {fmt.nBlockAlign}")
+print(f"  FormatTag: 0x{fmt.wFormatTag:X}")
+print(f"\nStart Genshin now! Press Ctrl+C to stop.\n")
+
+if fmt.nChannels >= 4:
+    print("  CH1=FL  CH2=FR  CH3=RL(haptic?)  CH4=RR(haptic?)\n")
+else:
+    print(f"  WARNING: Only {fmt.nChannels} channels in mix format!\n")
+
+comtypes.CoUninitialize()
