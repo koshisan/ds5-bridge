@@ -91,9 +91,12 @@ def callback(in_data, frame_count, time_info, status):
         sample_buffer.append(float_to_uint8(left_ds[i]))
         sample_buffer.append(float_to_uint8(right_ds[i]))
 
-    # Send all complete packets
-    while len(sample_buffer) >= DS5_SAMPLES_PER_PACKET * 2:
-        send_haptic_packet()
+    # Send packets only if there's actual audio signal
+    if peak > 0.005:
+        while len(sample_buffer) >= DS5_SAMPLES_PER_PACKET * 2:
+            send_haptic_packet()
+    else:
+        sample_buffer.clear()
 
     # Show activity
     peak = max(np.max(np.abs(left)), np.max(np.abs(right)))
