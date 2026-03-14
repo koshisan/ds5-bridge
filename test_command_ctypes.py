@@ -189,12 +189,12 @@ if ok:
         print(f"GetOverlappedResult: ok={ok2} err={err2} bytes={bytesReturned.value}")
 
     # Now poll 0x81 using HidD_GetFeature (which works correctly)
-    print("\nPolling 0x81 with HidD_GetFeature...")
+    print("\nPolling 0x81 with HidD_GetFeature (547B buffer)...")
     for i in range(50):
         time.sleep(0.02)
-        rbuf = (ctypes.c_ubyte * 64)()
+        rbuf = (ctypes.c_ubyte * flen)()
         rbuf[0] = 0x81
-        ok = HidD_GetFeature(handle, rbuf, 64)
+        ok = HidD_GetFeature(handle, rbuf, flen)
         data = bytes(rbuf)
         if any(b != 0 for b in data[1:]):
             print(f"Poll {i}: {data[:32].hex(' ')}")
