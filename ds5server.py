@@ -252,7 +252,7 @@ class DS5Server:
                 ffmpeg_cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 bufsize=0,
                 creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
             )
@@ -268,13 +268,17 @@ class DS5Server:
         send_until = 0.0
 
         # Reader thread: read ffmpeg stdout and send UDP
+        bytes_from_ffmpeg = 0
         def reader():
-            nonlocal seq, send_until
+            nonlocal seq, send_until, bytes_from_ffmpeg
+            print(f"[DS5Server] Reader thread started, reading {PACKET_SIZE}-byte blocks...")
             while self.running and ffproc.poll() is None:
                 try:
                     data = ffproc.stdout.read(PACKET_SIZE)
                     if not data or len(data) < PACKET_SIZE:
+                        print(f"[DS5Server] Reader: got {len(data) if data else 0} bytes (expected {PACKET_SIZE}), ffmpeg exit={ffproc.poll()}")
                         break
+                    bytes_from_ffmpeg += len(data)
 
                     # Silence gate: check if any sample deviates from center
                     has_signal = any(abs(b - 128) > 3 for b in data)
@@ -290,23 +294,36 @@ class DS5Server:
                         self.sock.sendto(packet, target)
                         seq = (seq + 1) & 0xFF
                         self.packets_sent += 1
+
+                    if bytes_from_ffmpeg % (PACKET_SIZE * 100) == 0:
+                        print(f"[DS5Server] ffmpeg: {bytes_from_ffmpeg}B read, {self.packets_sent} pkts sent, peak={self.last_peak:.3f}, signal={'YES' if has_signal else 'no'}")
                 except Exception as e:
                     print(f"[DS5Server] Reader error: {e}")
                     break
 
+            print(f"[DS5Server] Reader done. Total: {bytes_from_ffmpeg}B from ffmpeg, {self.packets_sent} pkts sent")
             self.ffmpeg_status = 'stopped'
 
         reader_thread = threading.Thread(target=reader, daemon=True)
         reader_thread.start()
 
         # Writer: capture audio and feed to ffmpeg stdin
+        bytes_to_ffmpeg = 0
         def callback(in_data, frame_count, time_info, status):
+            nonlocal bytes_to_ffmpeg
             if not self.running:
                 return (None, pyaudio.paComplete)
             try:
                 if ffproc.poll() is None:
                     ffproc.stdin.write(in_data)
-            except (BrokenPipeError, OSError):
+                    bytes_to_ffmpeg += len(in_data)
+                    if bytes_to_ffmpeg % (len(in_data) * 200) == 0:
+                        print(f"[DS5Server] -> ffmpeg stdin: {bytes_to_ffmpeg}B written")
+                else:
+                    print(f"[DS5Server] ffmpeg died! exit={ffproc.returncode}")
+                    return (None, pyaudio.paComplete)
+            except (BrokenPipeError, OSError) as e:
+                print(f"[DS5Server] stdin write error: {e}")
                 return (None, pyaudio.paComplete)
             return (None, pyaudio.paContinue)
 
@@ -333,6 +350,13 @@ class DS5Server:
         finally:
             try:
                 ffproc.stdin.close()
+            except:
+                pass
+            # Read any ffmpeg error output
+            try:
+                err = ffproc.stderr.read(4096)
+                if err:
+                    print(f"[DS5Server] ffmpeg stderr: {err}")
             except:
                 pass
             ffproc.terminate()
