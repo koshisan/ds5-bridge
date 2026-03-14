@@ -188,53 +188,22 @@ if ok:
         err2 = ctypes.GetLastError()
         print(f"GetOverlappedResult: ok={ok2} err={err2} bytes={bytesReturned.value}")
 
-    # Now poll 0x81 using DeviceIoControl GET_FEATURE
-    IOCTL_HID_GET_FEATURE = 0x000b0193
-    for i in range(30):
-        time.sleep(0.01)
-        rbuf = (ctypes.c_ubyte * flen)()
+    # Now poll 0x81 using HidD_GetFeature (which works correctly)
+    print("\nPolling 0x81 with HidD_GetFeature...")
+    for i in range(50):
+        time.sleep(0.02)
+        rbuf = (ctypes.c_ubyte * 64)()
         rbuf[0] = 0x81
-        ov2 = OVERLAPPED()
-        ev2 = ctypes.windll.kernel32.CreateEventW(None, True, False, None)
-        ov2.hEvent = ev2
-        br2 = ctypes.c_ulong(0)
-        ctypes.windll.kernel32.SetLastError(0)
-        ok = ctypes.windll.kernel32.DeviceIoControl(
-            handle, IOCTL_HID_GET_FEATURE,
-            None, 0,
-            rbuf, flen,
-            ctypes.byref(br2),
-            ctypes.byref(ov2))
-        err = ctypes.GetLastError()
-        if not ok and err == 997:
-            ctypes.windll.kernel32.WaitForSingleObject(ev2, 1000)
-            ctypes.windll.kernel32.GetOverlappedResult(
-                handle, ctypes.byref(ov2), ctypes.byref(br2), False)
-        ctypes.windll.kernel32.CloseHandle(ev2)
+        ok = HidD_GetFeature(handle, rbuf, 64)
         data = bytes(rbuf)
-        if data[1] == 0x09 and data[2] == 0x02:
-            print(f"Poll {i}: MATCH! status={data[3]:#04x} data={data[:20].hex(' ')}")
-            break
-        elif i < 3:
-            print(f"Poll {i}: {data[:20].hex(' ')}")
+        if any(b != 0 for b in data[1:]):
+            print(f"Poll {i}: {data[:32].hex(' ')}")
+            if data[1] == 0x09 and data[2] == 0x02:
+                print(f"  -> MATCH subcmd! status={data[3]:#04x}")
+                print(f"  -> Full: {data.hex(' ')}")
+                break
+        elif i < 3 or i == 49:
+            print(f"Poll {i}: all zeros")
 
     ctypes.windll.kernel32.CloseHandle(event)
-
-# Poll GET 0x81
-for i in range(30):
-    time.sleep(0.01)
-    rbuf = (ctypes.c_ubyte * 64)()
-    rbuf[0] = 0x81
-    ok = HidD_GetFeature(handle, rbuf, 64)
-    data = bytes(rbuf)
-    if data[1] == 0x09 and data[2] == 0x02:
-        print(f"Poll {i}: MATCH! status={data[3]:#04x} data={data[:20].hex(' ')}")
-        break
-    elif any(b != 0 for b in data[1:]):
-        if i < 3:
-            print(f"Poll {i}: {data[:20].hex(' ')}")
-    else:
-        if i == 0:
-            print(f"Poll {i}: zeros")
-
-ctypes.windll.kernel32.CloseHandle(handle)
+    ctypes.windll.kernel32.CloseHandle(handle)
