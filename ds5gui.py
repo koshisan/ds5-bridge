@@ -123,70 +123,107 @@ class DS5Server:
             return None
 
 
-    # --- Port Handoff ---
-    def _start_handoff(self):
-        """Background thread: standby on UDP port when driver off, load driver when client appears, unload when idle."""
-        self._handoff_running = True
-        t = threading.Thread(target=self._handoff_loop, daemon=True)
+    # --- Port Listener ---
+    def _start_listener(self):
+        """Background thread: grab UDP port when driver is off, release when driver is on."""
+        self._listener_running = True
+        self._standby_sock = None
+        t = threading.Thread(target=self._listener_loop, daemon=True)
         t.start()
 
-    def _handoff_loop(self):
+    def _listener_loop(self):
         port = 5555
-        timeout = self.config.get('idle_timeout', 10)
+        while getattr(self, '_listener_running', False):
+            hid_on = self.is_driver_enabled(DRIVER_HWID)
 
-        while getattr(self, '_handoff_running', False):
-            # Check driver status via shared memory
-            shared = self.read_shared_status()
-
-            if shared and shared['driver_active']:
-                # Driver running — monitor for idle
-                now_ms = int(time.time() * 1000)
-                idle_s = (now_ms - shared['last_seen']) / 1000.0 if shared['last_seen'] > 0 else 0
-
-                if idle_s > timeout and shared['packets_in'] > 0:
-                    print(f"[DS5] Client idle {idle_s:.0f}s > {timeout}s, unloading HID driver...")
-                    self.disable_driver(DRIVER_HWID)
-                    self._handoff_status = 'idle -> standby'
-                    time.sleep(1)
-                    continue
-
-                self._handoff_status = f'driver active, idle {idle_s:.0f}s'
-                time.sleep(1)
+            if hid_on:
+                # Driver loaded — release port if we have it
+                if self._standby_sock:
+                    print("[DS5] Driver active, releasing port")
+                    self._standby_sock.close()
+                    self._standby_sock = None
+                self._handoff_status = 'port -> driver'
+                time.sleep(2)
                 continue
 
-            # Driver not loaded — listen for client
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                sock.settimeout(2.0)
-                sock.bind(('0.0.0.0', port))
-                self._handoff_status = f'standby on :{port}'
-                print(f"[DS5] Standby: listening on port {port}")
-
-                while getattr(self, '_handoff_running', False):
-                    try:
-                        data, addr = sock.recvfrom(1024)
-                        if len(data) >= 64:
-                            print(f"[DS5] Client {addr[0]}:{addr[1]} detected, loading HID driver...")
-                            self._handoff_status = 'loading driver...'
-                            sock.close()
-                            time.sleep(0.3)
-                            self.enable_driver(DRIVER_HWID)
-                            time.sleep(2)
-                            break
-                    except socket.timeout:
-                        continue
-                    except Exception as e:
-                        print(f"[DS5] Standby error: {e}")
-                        break
-            except OSError as e:
-                if e.errno == 10048:  # WSAEADDRINUSE
-                    self._handoff_status = 'port in use, waiting...'
+            # Driver not loaded — grab port if we don't have it
+            if not self._standby_sock:
+                try:
+                    self._standby_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    self._standby_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    self._standby_sock.settimeout(2.0)
+                    self._standby_sock.bind(('0.0.0.0', port))
+                    print(f"[DS5] Standby: grabbed port {port}")
+                except OSError as e:
+                    self._standby_sock = None
+                    if e.errno == 10048:
+                        self._handoff_status = f'port {port} in use, retry...'
+                    else:
+                        self._handoff_status = f'bind error: {e}'
                     time.sleep(2)
+                    continue
+
+            # Listen for client
+            self._handoff_status = f'listening :{port}'
+            try:
+                data, addr = self._standby_sock.recvfrom(1024)
+                if len(data) >= 64:
+                    print(f"[DS5] Client {addr[0]}:{addr[1]} detected!")
+                    self._on_client_detected()
+            except socket.timeout:
+                pass
+            except Exception as e:
+                print(f"[DS5] Listen error: {e}")
+                self._standby_sock.close()
+                self._standby_sock = None
+                time.sleep(1)
+
+    def _on_client_detected(self):
+        """Client packet received — auto-enable things as configured."""
+        # Release port first
+        if self._standby_sock:
+            self._standby_sock.close()
+            self._standby_sock = None
+        time.sleep(0.3)
+
+        if self.config.get('auto_enable_hid', True):
+            if not self.is_driver_enabled(DRIVER_HWID):
+                print("[DS5] Auto-enabling HID driver...")
+                self._handoff_status = 'loading HID driver...'
+                self.enable_driver(DRIVER_HWID)
+                time.sleep(2)
+
+        if self.config.get('auto_capture', True):
+            if not self.capturing:
+                print("[DS5] Auto-starting capture...")
+                self.start_capture()
+
+    # --- Idle Monitor ---
+    def _start_idle_monitor(self):
+        self._idle_running = True
+        t = threading.Thread(target=self._idle_loop, daemon=True)
+        t.start()
+
+    def _idle_loop(self):
+        timeout = self.config.get('idle_timeout', 10)
+        while getattr(self, '_idle_running', False):
+            shared = self.read_shared_status()
+            if shared and shared['driver_active'] and shared['packets_in'] > 0:
+                now_ms = int(time.time() * 1000)
+                idle_s = (now_ms - shared['last_seen']) / 1000.0
+
+                if idle_s > timeout:
+                    print(f"[DS5] Client idle {idle_s:.0f}s, auto-disabling...")
+                    self._handoff_status = f'idle {idle_s:.0f}s -> standby'
+
+                    if self.config.get('auto_enable_hid', True):
+                        self.disable_driver(DRIVER_HWID)
+
+                    if self.config.get('auto_capture', True):
+                        self.stop_capture()
                 else:
-                    print(f"[DS5] Bind error: {e}")
-                    self._handoff_status = f'error: {e}'
-                    time.sleep(5)
+                    self._handoff_status = f'active, idle {idle_s:.0f}s / {timeout}s'
+            time.sleep(1)
 
     # --- Driver Management ---
     def _get_instance_id(self, hwid):
@@ -362,9 +399,9 @@ class DS5GUI:
         self._build_ui()
         self._update_loop()
 
-        # Start port handoff if HID auto-enable
-        if self.server.config.get('auto_enable_hid', True):
-            self.server._start_handoff()
+        # Start port listener and idle monitor
+        self.server._start_listener()
+        self.server._start_idle_monitor()
 
         # Auto-start capture if configured
         if self.server.config.get('auto_capture', True):
