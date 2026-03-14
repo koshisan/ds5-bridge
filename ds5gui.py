@@ -87,12 +87,20 @@ class DS5Server:
     # --- Shared Memory ---
     def read_shared_status(self):
         try:
-            handle = ctypes.windll.kernel32.OpenFileMappingW(0x0004, False, DS5_SHARED_MEMORY_NAME)
+            kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+            kernel32.OpenFileMappingW.restype = ctypes.c_void_p
+            kernel32.OpenFileMappingW.argtypes = [ctypes.c_uint32, ctypes.c_bool, ctypes.c_wchar_p]
+            kernel32.MapViewOfFile.restype = ctypes.c_void_p
+            kernel32.MapViewOfFile.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_size_t]
+            kernel32.UnmapViewOfFile.argtypes = [ctypes.c_void_p]
+            kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+
+            handle = kernel32.OpenFileMappingW(0x0004, False, DS5_SHARED_MEMORY_NAME)
             if not handle:
                 return None
-            ptr = ctypes.windll.kernel32.MapViewOfFile(handle, 0x0004, 0, 0, ctypes.sizeof(DS5SharedStatus))
+            ptr = kernel32.MapViewOfFile(handle, 0x0004, 0, 0, ctypes.sizeof(DS5SharedStatus))
             if not ptr:
-                ctypes.windll.kernel32.CloseHandle(handle)
+                kernel32.CloseHandle(handle)
                 return None
             status = DS5SharedStatus.from_address(ptr)
             result = {
@@ -105,8 +113,8 @@ class DS5Server:
                 'packets_out': status.packets_out,
                 'driver_active': bool(status.driver_active),
             }
-            ctypes.windll.kernel32.UnmapViewOfFile(ptr)
-            ctypes.windll.kernel32.CloseHandle(handle)
+            kernel32.UnmapViewOfFile(ptr)
+            kernel32.CloseHandle(handle)
             return result
         except Exception:
             return None
