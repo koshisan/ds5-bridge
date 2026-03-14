@@ -145,6 +145,7 @@ except Exception as e:
         None
     )
     fmt.Format.nChannels = mix_fmt.contents.nChannels
+    channels = fmt.Format.nChannels
     print(f"Initialized with {mix_fmt.contents.nChannels}ch loopback")
 
 channels = fmt.Format.nChannels
