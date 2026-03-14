@@ -34,6 +34,10 @@ def ds5_bt_crc32(data):
     """CRC32 with DS5 BT seed byte 0xA2."""
     return zlib.crc32(bytes([0xA2]) + data) & 0xFFFFFFFF
 
+def ds5_crc32_payload(seed_bytes, data_bytes):
+    """CRC32 for DS5 feature report payload. seed_bytes e.g. [0x53, 0x80]."""
+    return zlib.crc32(bytes(seed_bytes) + bytes(data_bytes)) & 0xFFFFFFFF
+
 def ds5_bt_crc32_seed(data, seed):
     """CRC32 with configurable seed byte."""
     return zlib.crc32(bytes([seed]) + data) & 0xFFFFFFFF
@@ -84,16 +88,19 @@ def output_receiver(sock, dev, is_bt, haptic_queue=None):
                 print(f'  [FEATURE] SET 0x{report_id:02X} ({len(payload)}B): {bytes(payload[:16]).hex(chr(32))}')
                 try:
                     if is_bt:
-                        # BT feature reports need CRC32 (seed 0xA3)
-                        # Format: [reportId, ...data..., CRC32]
-                        buf = bytearray(payload)
-                        # Pad to expected size if needed
-                        while len(buf) < 74:
-                            buf.append(0)
-                        crc = ds5_bt_crc32_seed(bytes(buf[:len(buf)]), 0xA3)
-                        buf.extend(struct.pack("<I", crc))
+                        # DS5 BT feature SET needs payload CRC32
+                        # Seed: [0x53, reportId], placed in last 4 bytes of 64-byte report
+                        # Layout: [reportId, subcmd, subsub, ...zeros..., CRC32] = 64 bytes
+                        buf = bytearray(64)
+                        buf[0] = report_id
+                        # Copy payload data (skip report_id since it's already buf[0])
+                        pdata = data[2:]  # skip 0x05 prefix and report_id
+                        buf[1:1+len(pdata)] = pdata[:63]
+                        # CRC32 over buf[1..59] with seed [0x53, reportId]
+                        crc = ds5_crc32_payload([0x53, report_id], buf[1:60])
+                        struct.pack_into('<I', buf, 60, crc)
                         dev.send_feature_report(bytes(buf))
-                        print(f'  [FEATURE] SET 0x{report_id:02X} BT with CRC ({len(buf)}B)')
+                        print(f'  [FEATURE] SET 0x{report_id:02X} BT+CRC ({len(buf)}B)')
                     else:
                         dev.send_feature_report(payload)
                 except Exception as e:
