@@ -76,7 +76,7 @@ class IAudioCaptureClient(IUnknown):
     _iid_ = IID_IAudioCaptureClient
     _methods_ = [
         COMMETHOD([], HRESULT, 'GetBuffer',
-            (['out', 'retval'], POINTER(ctypes.c_void_p), 'ppData'),
+            (['out'], POINTER(ctypes.c_void_p), 'ppData'),
             (['out'], POINTER(c_uint32), 'pNumFramesAvailable'),
             (['out'], POINTER(c_uint32), 'pdwFlags'),
             (['out'], POINTER(ctypes.c_ulonglong), 'pu64DevicePosition'),
@@ -167,16 +167,11 @@ try:
         packet_size = capture_client.GetNextPacketSize()
 
         while packet_size > 0:
-            frames = c_uint32()
-            flags = c_uint32()
-            dev_pos = ctypes.c_ulonglong()
-            qpc_pos = ctypes.c_ulonglong()
+            result = capture_client.GetBuffer()
+            data_ptr, frames, flags, dev_pos, qpc_pos = result
 
-            data_ptr = capture_client.GetBuffer(byref(frames), byref(flags),
-                                     byref(dev_pos), byref(qpc_pos))
-
-            if frames.value > 0 and data_ptr:
-                n = frames.value * channels
+            if frames > 0 and data_ptr:
+                n = frames * channels
                 buf = (ctypes.c_float * n).from_address(data_ptr.value)
                 data = np.ctypeslib.as_array(buf).reshape(-1, channels)
 
@@ -186,7 +181,7 @@ try:
                     parts = [f"{labels[i]}:{peaks[i]:.3f} {'#'*int(min(peaks[i],1)*15):15s}" for i in range(len(labels))]
                     print(f"\r{'|'.join(parts)}", end="", flush=True)
 
-            capture_client.ReleaseBuffer(frames.value)
+            capture_client.ReleaseBuffer(frames)
             packet_size = capture_client.GetNextPacketSize()
 
 except KeyboardInterrupt:
