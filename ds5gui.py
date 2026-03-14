@@ -1,5 +1,3 @@
-import traceback
-try:
 """DS5 Bridge Server - GUI App with system tray."""
 import sys
 import os
@@ -433,9 +431,11 @@ class DS5GUI:
 
 
 if __name__ == '__main__':
-    gui = DS5GUI()
-    gui.run()
+    try:
+        gui = DS5GUI()
+        gui.run()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        input("Press Enter to exit...")
 
-except Exception as e:
-    traceback.print_exc()
-    input("Press Enter to exit...")
