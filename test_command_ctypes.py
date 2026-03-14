@@ -97,18 +97,61 @@ HidD_GetFeature = ctypes.windll.hid.HidD_GetFeature
 HidD_GetFeature.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong]
 HidD_GetFeature.restype = ctypes.c_bool
 
-# Try different buffer sizes for SET 0x80
-for size in [64, 65, 78, 334]:
-    buf = (ctypes.c_ubyte * size)()
-    buf[0] = 0x80
-    buf[1] = 0x09  # SYSTEM
-    buf[2] = 0x02  # READ_PCBAID
+# Check what HidD_GetFeature returns for different report IDs
+for rid in [0x05, 0x09, 0x20, 0x22, 0x80, 0x81]:
+    rbuf = (ctypes.c_ubyte * 64)()
+    rbuf[0] = rid
     ctypes.windll.kernel32.SetLastError(0)
-    ok = HidD_SetFeature(handle, buf, size)
+    ok = HidD_GetFeature(handle, rbuf, 64)
     err = ctypes.GetLastError()
-    print(f"SET 0x80 size={size}: ok={ok} err={err}")
-    if ok:
-        break
+    data = bytes(rbuf)
+    print(f"GET 0x{rid:02X} size=64: ok={ok} err={err} data={data[:16].hex(' ')}")
+
+# Check HidP_GetCaps to see actual feature report sizes
+HidD_GetPreparsedData = ctypes.windll.hid.HidD_GetPreparsedData
+HidD_GetPreparsedData.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+HidD_GetPreparsedData.restype = ctypes.c_bool
+
+HidP_GetCaps = ctypes.windll.hid.HidP_GetCaps
+
+class HIDP_CAPS(ctypes.Structure):
+    _fields_ = [
+        ("Usage", ctypes.c_ushort), ("UsagePage", ctypes.c_ushort),
+        ("InputReportByteLength", ctypes.c_ushort), ("OutputReportByteLength", ctypes.c_ushort),
+        ("FeatureReportByteLength", ctypes.c_ushort),
+        ("Reserved", ctypes.c_ushort * 17),
+        ("NumberLinkCollectionNodes", ctypes.c_ushort),
+        ("NumberInputButtonCaps", ctypes.c_ushort), ("NumberInputValueCaps", ctypes.c_ushort),
+        ("NumberInputDataIndices", ctypes.c_ushort),
+        ("NumberOutputButtonCaps", ctypes.c_ushort), ("NumberOutputValueCaps", ctypes.c_ushort),
+        ("NumberOutputDataIndices", ctypes.c_ushort),
+        ("NumberFeatureButtonCaps", ctypes.c_ushort), ("NumberFeatureValueCaps", ctypes.c_ushort),
+        ("NumberFeatureDataIndices", ctypes.c_ushort),
+    ]
+
+pp = ctypes.c_void_p()
+ok = HidD_GetPreparsedData(handle, ctypes.byref(pp))
+print(f"\nGetPreparsedData: {ok}")
+
+if ok:
+    caps = HIDP_CAPS()
+    HidP_GetCaps(pp, ctypes.byref(caps))
+    print(f"FeatureReportByteLength: {caps.FeatureReportByteLength}")
+    print(f"InputReportByteLength: {caps.InputReportByteLength}")
+    print(f"OutputReportByteLength: {caps.OutputReportByteLength}")
+
+# Now try SET with FeatureReportByteLength
+    flen = caps.FeatureReportByteLength
+    buf = (ctypes.c_ubyte * flen)()
+    buf[0] = 0x80
+    buf[1] = 0x09
+    buf[2] = 0x02
+    ctypes.windll.kernel32.SetLastError(0)
+    ok = HidD_SetFeature(handle, buf, flen)
+    err = ctypes.GetLastError()
+    print(f"\nSET 0x80 size={flen} (from caps): ok={ok} err={err}")
+
+    ctypes.windll.hid.HidD_FreePreparsedData(pp)
 
 # Poll GET 0x81
 for i in range(30):
