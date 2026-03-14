@@ -4,18 +4,38 @@ import time
 
 p = pyaudio.PyAudio()
 
-# Find DualSense WASAPI loopback device (speaker, not mic)
+# Find DualSense speaker loopback - search by name containing "2-" and "Loopback"
 ds5_dev = None
 for i in range(p.get_device_count()):
     info = p.get_device_info_by_index(i)
     name = info['name']
-    if ('DualSense' in name or 'Wireless Controller' in name) and info.get('isLoopbackDevice') and info['maxInputChannels'] > 0 and 'Mikrofon' not in name and 'Microphone' not in name:
+    if ('2- DualSense' in name or '2-DualSense' in name) and 'Loopback' in name:
         ds5_dev = info
+        print(f"Found loopback: [{i}] {name} ch={info['maxInputChannels']}")
         break
 
+# Fallback: find the output device and get its loopback
 if ds5_dev is None:
-    print("DualSense speaker loopback not found!")
-    print("Available loopback devices:")
+    print("No loopback found directly, trying to get loopback from output device...")
+    for i in range(p.get_device_count()):
+        info = p.get_device_info_by_index(i)
+        name = info['name']
+        if ('2- DualSense' in name or '2-DualSense' in name) and info['maxOutputChannels'] > 0 and not info.get('isLoopbackDevice'):
+            print(f"Found output device: [{i}] {name} ch_out={info['maxOutputChannels']}")
+            try:
+                loopback = p.get_loopback_device_info_generator()
+                for lb in loopback:
+                    if '2- DualSense' in lb['name'] or '2-DualSense' in lb['name']:
+                        ds5_dev = lb
+                        print(f"Found loopback via generator: {lb['name']} ch={lb['maxInputChannels']}")
+                        break
+            except Exception as e:
+                print(f"Loopback generator failed: {e}")
+            break
+
+if ds5_dev is None:
+    print("\nCould not find DualSense loopback device.")
+    print("All loopback devices:")
     for i in range(p.get_device_count()):
         info = p.get_device_info_by_index(i)
         if info.get('isLoopbackDevice'):
@@ -23,12 +43,11 @@ if ds5_dev is None:
     p.terminate()
     exit(1)
 
-print(f"Listening on: {ds5_dev['name']} (index {ds5_dev['index']})")
-print(f"  Channels: {ds5_dev['maxInputChannels']}, Rate: {int(ds5_dev['defaultSampleRate'])}")
-print("Start Genshin now! Press Ctrl+C to stop.\n")
-
 channels = ds5_dev['maxInputChannels']
 rate = int(ds5_dev['defaultSampleRate'])
+print(f"\nListening on: {ds5_dev['name']} (index {ds5_dev['index']})")
+print(f"  Channels: {channels}, Rate: {rate}")
+print("Start Genshin now! Press Ctrl+C to stop.\n")
 
 def callback(in_data, frame_count, time_info, status):
     data = np.frombuffer(in_data, dtype=np.float32)
