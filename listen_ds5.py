@@ -3,7 +3,6 @@ Based on SAxense research: https://apps.sdore.me/SAxense
 """
 import pyaudiowpatch as pyaudio
 import numpy as np
-from scipy.signal import decimate
 import socket
 import time
 import sys
@@ -15,7 +14,7 @@ DS5_SAMPLES_PER_PACKET = 32  # 32 stereo samples per Report 0x32
 PACKET_INTERVAL = DS5_SAMPLES_PER_PACKET / DS5_HAPTIC_RATE  # ~10.67ms
 UDP_HOST = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 UDP_PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 5556  # Separate port for haptic data
-GAIN = 100.0  # Amplification factor
+GAIN = 200.0  # Amplification factor
 
 p = pyaudio.PyAudio()
 
@@ -50,6 +49,7 @@ sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 # Accumulator for downsampled samples
 sample_buffer = bytearray()
 seq = 0
+send_until = 0.0  # timestamp until which we keep sending
 
 def float_to_uint8(f):
     """Convert float [-1.0, 1.0] to uint8 [0, 255]."""
@@ -83,19 +83,24 @@ def callback(in_data, frame_count, time_info, status):
     else:
         left = right = data[:, 0]
 
-    # Downsample with anti-aliasing filter (preserves waveform shape)
-    if len(left) >= downsample_ratio:
-        left_ds = decimate(left, downsample_ratio, ftype='fir', zero_phase=False)
-        right_ds = decimate(right, downsample_ratio, ftype='fir', zero_phase=False)
-        for i in range(len(left_ds)):
-            sample_buffer.append(float_to_uint8(left_ds[i]))
-            sample_buffer.append(float_to_uint8(right_ds[i]))
+    # Simple decimation - no smoothing, raw samples
+    left_ds = left[::downsample_ratio]
+    right_ds = right[::downsample_ratio]
+    for i in range(len(left_ds)):
+        sample_buffer.append(float_to_uint8(left_ds[i]))
+        sample_buffer.append(float_to_uint8(right_ds[i]))
 
     # Calculate peak for gate and display
     peak = max(np.max(np.abs(left)), np.max(np.abs(right)))
 
-    # Send packets only if there's actual audio signal
+    # If peak detected, extend send window by 1 second
+    global send_until
+    now = time.time()
     if peak > 0.009:
+        send_until = now + 1.0
+
+    # Send packets if within send window
+    if now < send_until:
         while len(sample_buffer) >= DS5_SAMPLES_PER_PACKET * 2:
             send_haptic_packet()
     else:
