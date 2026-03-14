@@ -320,7 +320,7 @@ class DS5Server:
         shared = self.read_shared_status()
         if shared and shared['driver_active']:
             return f'Driver: ON | Client: {shared["client_ip"]}:{shared["client_port"]} | In:{shared["packets_in"]} Out:{shared["packets_out"]}'
-        return f'Driver: {"ON" if self._hid_enabled else "OFF"} | Capture: {"ON" if self.running else "OFF"}'
+        return f'Driver: {"ON" if getattr(self, "_hid_enabled", False) else "OFF"} | Capture: {"ON" if self.running else "OFF"}'
 
     def _create_icon(self, color='green'):
         img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
