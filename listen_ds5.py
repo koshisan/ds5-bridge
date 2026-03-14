@@ -91,6 +91,9 @@ def callback(in_data, frame_count, time_info, status):
         sample_buffer.append(float_to_uint8(left_ds[i]))
         sample_buffer.append(float_to_uint8(right_ds[i]))
 
+    # Calculate peak for gate and display
+    peak = max(np.max(np.abs(left)), np.max(np.abs(right)))
+
     # Send packets only if there's actual audio signal
     if peak > 0.009:
         while len(sample_buffer) >= DS5_SAMPLES_PER_PACKET * 2:
