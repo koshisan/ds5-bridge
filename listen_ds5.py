@@ -94,7 +94,7 @@ def callback(in_data, frame_count, time_info, status):
     while len(sample_buffer) >= DS5_SAMPLES_PER_PACKET * 2:
         # Check if this chunk has actual audio
         chunk = sample_buffer[:DS5_SAMPLES_PER_PACKET * 2]
-        has_signal = any(abs(b - 128) > 2 for b in chunk)
+        has_signal = any(abs(b - 128) > 1 for b in chunk)
         if has_signal:
             send_haptic_packet()
         else:
