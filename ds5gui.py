@@ -379,7 +379,9 @@ class DS5GUI:
 
         # Shared memory
         try:
+            print('[UPD] about to read shared memory')
             shared = self.server.read_shared_status()
+            print(f'[UPD] shared = {shared}')
             if shared and shared['driver_active']:
                 self.lbl_driver.config(text="Driver: ACTIVE", foreground='green')
                 self.lbl_client.config(text=f"Client: {shared['client_ip']}:{shared['client_port']}")
