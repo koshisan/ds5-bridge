@@ -1,4 +1,4 @@
-"""SET 0x80 / GET 0x81 using DeviceIoControl for BOTH (exactly like Chromium)."""
+"""Hybrid: DeviceIoControl SET + HidD_GetFeature GET on OVERLAPPED handle."""
 import ctypes
 import time
 import hid as _hid
@@ -30,6 +30,7 @@ for d in _hid.enumerate(0x054C, 0x0CE6):
 if not ds5_path:
     print("DS5 not found!"); exit(1)
 
+# Open with FILE_FLAG_OVERLAPPED
 handle = ctypes.windll.kernel32.CreateFileW(
     ds5_path, 0xC0000000, 3, None, 3, 0x40000000, None)
 
@@ -41,87 +42,64 @@ flen = caps.FeatureReportByteLength
 print(f"FeatureReportByteLength: {flen}")
 ctypes.windll.hid.HidD_FreePreparsedData(pp)
 
-# Set proper argtypes for DeviceIoControl
-DeviceIoControl = ctypes.windll.kernel32.DeviceIoControl
-DeviceIoControl.argtypes = [
-    ctypes.c_void_p,   # hDevice
-    ctypes.c_ulong,    # dwIoControlCode
-    ctypes.c_void_p,   # lpInBuffer
-    ctypes.c_ulong,    # nInBufferSize
-    ctypes.c_void_p,   # lpOutBuffer
-    ctypes.c_ulong,    # nOutBufferSize
-    ctypes.POINTER(ctypes.c_ulong),  # lpBytesReturned
-    ctypes.POINTER(OVERLAPPED),      # lpOverlapped
-]
-DeviceIoControl.restype = ctypes.c_bool
+HidD_GetFeature = ctypes.windll.hid.HidD_GetFeature
+HidD_GetFeature.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong]
+HidD_GetFeature.restype = ctypes.c_bool
 
 IOCTL_SET = 0x000b0197
-IOCTL_GET = 0x000b0193
 
-def do_ioctl(ioctl_code, in_buf, in_size, out_buf, out_size, timeout_ms=5000):
-    ov = OVERLAPPED()
-    ev = ctypes.windll.kernel32.CreateEventW(None, True, False, None)
-    ov.hEvent = ev
-    br = ctypes.c_ulong(0)
-    ctypes.windll.kernel32.SetLastError(0)
-    ok = DeviceIoControl(
-        handle, ioctl_code, in_buf, in_size, out_buf, out_size,
-        ctypes.byref(br), ctypes.byref(ov))
-    err = ctypes.GetLastError()
-    if not ok and err == 997:  # ERROR_IO_PENDING
-        wait = ctypes.windll.kernel32.WaitForSingleObject(ev, timeout_ms)
-        if wait == 0:  # WAIT_OBJECT_0
-            ok = ctypes.windll.kernel32.GetOverlappedResult(
-                handle, ctypes.byref(ov), ctypes.byref(br), False)
-            err = ctypes.GetLastError() if not ok else 0
-        else:
-            ctypes.windll.kernel32.CancelIoEx(handle, ctypes.byref(ov))
-            err = -1  # timeout
-            ok = False
-    ctypes.windll.kernel32.CloseHandle(ev)
-    return ok, err, br.value
+# Verify HidD_GetFeature works on this overlapped handle
+for rid in [0x05, 0x09, 0x20]:
+    buf = (ctypes.c_ubyte * 64)()
+    buf[0] = rid
+    ok = HidD_GetFeature(handle, buf, 64)
+    data = bytes(buf)
+    print(f"HidD_GetFeature 0x{rid:02X}: ok={ok} data={data[:16].hex(' ')}")
 
-def ioctl_set_feature(data_bytes):
-    buf = (ctypes.c_ubyte * flen)()
-    for i, b in enumerate(data_bytes[:flen]):
-        buf[i] = b
-    return do_ioctl(IOCTL_SET, buf, flen, None, 0)
-
-def ioctl_get_feature(report_id):
-    buf = (ctypes.c_ubyte * flen)()
-    buf[0] = report_id
-    ok, err, br = do_ioctl(IOCTL_GET, None, 0, buf, flen, 2000)
-    return bytes(buf), ok, err, br
-
-# Test: GET 0x05 via DeviceIoControl (not HidD_GetFeature!)
-data, ok, err, br = ioctl_get_feature(0x05)
-print(f"GET 0x05: ok={ok} err={err} bytes={br} data={data[:16].hex(' ')}")
-
-data, ok, err, br = ioctl_get_feature(0x20)
-print(f"GET 0x20: ok={ok} err={err} bytes={br} data={data[:16].hex(' ')}")
-
-# Now SET 0x80 + poll GET 0x81
+# Now SET 0x80 via DeviceIoControl + poll with HidD_GetFeature
 subcmds = [
     (0x09, 0x02, "PCBA_ID"),
     (0x01, 0x11, "FW_VER_1"),
 ]
 
 for sub1, sub2, name in subcmds:
-    ok, err, br = ioctl_set_feature([0x80, sub1, sub2])
+    buf = (ctypes.c_ubyte * flen)()
+    buf[0] = 0x80
+    buf[1] = sub1
+    buf[2] = sub2
+    
+    ov = OVERLAPPED()
+    ev = ctypes.windll.kernel32.CreateEventW(None, True, False, None)
+    ov.hEvent = ev
+    br = ctypes.c_ulong(0)
+    ctypes.windll.kernel32.SetLastError(0)
+    ok = ctypes.windll.kernel32.DeviceIoControl(
+        handle, IOCTL_SET,
+        ctypes.byref(buf), flen,
+        None, 0,
+        ctypes.byref(br), ctypes.byref(ov))
+    err = ctypes.GetLastError()
+    if not ok and err == 997:
+        ctypes.windll.kernel32.WaitForSingleObject(ev, 5000)
+        ok = ctypes.windll.kernel32.GetOverlappedResult(
+            handle, ctypes.byref(ov), ctypes.byref(br), False)
+        err = ctypes.GetLastError() if not ok else 0
+    ctypes.windll.kernel32.CloseHandle(ev)
     print(f"\nSET 0x80 [{sub1:#04x},{sub2:#04x}] ({name}): ok={ok} err={err}")
     
     for i in range(80):
         time.sleep(0.015)
-        data, gok, gerr, gbr = ioctl_get_feature(0x81)
+        rbuf = (ctypes.c_ubyte * 64)()
+        rbuf[0] = 0x81
+        HidD_GetFeature(handle, rbuf, 64)
+        data = bytes(rbuf)
         if data[1] == sub1 and data[2] == sub2:
-            print(f"  Poll {i}: MATCH! status={data[3]:#04x} bytes={gbr}")
+            print(f"  Poll {i}: MATCH! status={data[3]:#04x}")
             print(f"  Data: {data[:32].hex(' ')}")
             break
-        elif any(b != 0 for b in data[1:10]):
-            if i < 5:
-                print(f"  Poll {i}: non-zero: {data[:20].hex(' ')}")
+        elif any(b != 0 for b in data[1:10]) and i < 3:
+            print(f"  Poll {i}: {data[:20].hex(' ')}")
     else:
-        # Show what 0x81 actually returns
-        print(f"  -> no match after 80 polls. Last: {data[:20].hex(' ')}")
+        print(f"  -> zeros/no match after 80 polls")
 
 ctypes.windll.kernel32.CloseHandle(handle)
