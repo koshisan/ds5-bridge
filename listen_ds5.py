@@ -67,6 +67,7 @@ def send_haptic_packet():
     # Build UDP packet: [0]=magic 0x32, [1]=seq, [2..65]=audio samples
     packet = struct.pack('BB', 0x32, seq & 0xFF) + audio_data
     sock.sendto(packet, (UDP_HOST, UDP_PORT))
+    print(f" ->sent {len(packet)}B to {UDP_HOST}:{UDP_PORT}", flush=True)
     seq += 1
 
 def callback(in_data, frame_count, time_info, status):
