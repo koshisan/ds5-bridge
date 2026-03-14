@@ -102,9 +102,9 @@ def callback(in_data, frame_count, time_info, status):
 
     # Show activity
     peak = max(np.max(np.abs(left)), np.max(np.abs(right)))
-    if peak > 0.001:
+    if peak > 0.0001:
         bars = '#' * int(min(peak * GAIN, 1.0) * 30)
-        print(f"\rpeak:{peak:.3f} pkt:{seq} buf:{len(sample_buffer)} {bars}    ", end="", flush=True)
+        print(f"\rpeak:{peak:.3f} pkt:{seq} buf:{len(sample_buffer)} {bars} SENT!    ", end="", flush=True)
 
     return (None, pyaudio.paContinue)
 
