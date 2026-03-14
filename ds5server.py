@@ -81,38 +81,35 @@ class DS5Server:
     def is_driver_enabled(self, hwid):
         try:
             result = subprocess.run(
-                ['powershell', '-Command', f'(Get-PnpDevice | Where-Object {{ $_.HardwareID -contains "{hwid}" }}).Status'],
+                ['powershell', '-Command',
+                 f'Get-PnpDevice | Where-Object {{ $_.HardwareID -contains "{hwid}" }} | Select-Object -ExpandProperty Status'],
                 capture_output=True, text=True, timeout=5)
-            return 'OK' in result.stdout
+            status = result.stdout.strip()
+            return status == 'OK'
         except:
             return False
 
+    def _get_instance_id(self, hwid):
+        try:
+            result = subprocess.run(
+                ['powershell', '-Command',
+                 f'Get-PnpDevice | Where-Object {{ $_.HardwareID -contains "{hwid}" }} | Select-Object -ExpandProperty InstanceId'],
+                capture_output=True, text=True, timeout=5)
+            return result.stdout.strip()
+        except:
+            return None
+
     def enable_driver(self, hwid):
-        # Get instance ID first
-        ok, out = self._run_elevated(f'pnputil /enum-devices /ids')
-        instance_id = self._find_instance_id(out, hwid)
-        if instance_id:
-            return self._run_elevated(f'pnputil /enable-device "{instance_id}"')
+        iid = self._get_instance_id(hwid)
+        if iid:
+            return self._run_elevated(f'pnputil /enable-device "{iid}"')
         return False, f"Device {hwid} not found"
 
     def disable_driver(self, hwid):
-        ok, out = self._run_elevated(f'pnputil /enum-devices /ids')
-        instance_id = self._find_instance_id(out, hwid)
-        if instance_id:
-            return self._run_elevated(f'pnputil /disable-device "{instance_id}"')
+        iid = self._get_instance_id(hwid)
+        if iid:
+            return self._run_elevated(f'pnputil /disable-device "{iid}"')
         return False, f"Device {hwid} not found"
-
-    def _find_instance_id(self, pnputil_output, hwid):
-        """Parse pnputil output to find instance ID for a hardware ID."""
-        lines = pnputil_output.split('\n')
-        current_instance = None
-        for line in lines:
-            line = line.strip()
-            if line.startswith('Instance') or line.startswith('Instanz'):
-                current_instance = line.split(':', 1)[-1].strip()
-            if hwid.lower() in line.lower() and current_instance:
-                return current_instance
-        return None
 
     # --- Audio Capture ---
     def _find_loopback(self):
