@@ -322,6 +322,15 @@ class DS5Server:
             print(f"[DS5Server] Autostart error: {e}")
 
     # --- Tray Icon ---
+    def _status_line(self):
+        try:
+            shared = self.read_shared_status()
+            if shared and shared['driver_active']:
+                return f'Driver: ON | Client: {shared["client_ip"]}:{shared["client_port"]}'
+        except Exception:
+            pass
+        return f'Client: {self.config["client_ip"]}'
+
     def _create_icon(self, color='green'):
         img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
@@ -336,7 +345,7 @@ class DS5Server:
     def _build_menu(self):
         return pystray.Menu(
             pystray.MenuItem(
-                lambda text: f'Client: {self.config["client_ip"]}', None, enabled=False),
+                lambda text: self._status_line(), None, enabled=False),
             pystray.MenuItem(
                 lambda text: f'Packets: {self.packets_sent} | Peak: {self.last_peak:.4f}', None, enabled=False),
             pystray.Menu.SEPARATOR,
