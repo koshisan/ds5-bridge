@@ -4,16 +4,17 @@ import time
 
 p = pyaudio.PyAudio()
 
-# Find DualSense WASAPI loopback device
+# Find DualSense WASAPI loopback device (speaker, not mic)
 ds5_dev = None
 for i in range(p.get_device_count()):
     info = p.get_device_info_by_index(i)
-    if 'DualSense' in info['name'] or 'Wireless Controller' in info['name'] and info['isLoopbackDevice']:
+    name = info['name']
+    if ('DualSense' in name or 'Wireless Controller' in name) and info.get('isLoopbackDevice') and info['maxInputChannels'] > 0 and 'Mikrofon' not in name and 'Microphone' not in name:
         ds5_dev = info
         break
 
 if ds5_dev is None:
-    print("DualSense loopback device not found!")
+    print("DualSense speaker loopback not found!")
     print("Available loopback devices:")
     for i in range(p.get_device_count()):
         info = p.get_device_info_by_index(i)
