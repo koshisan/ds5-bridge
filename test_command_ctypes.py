@@ -153,6 +153,11 @@ if ok:
         FILE_FLAG_OVERLAPPED, None)
     print(f"\nReopened with OVERLAPPED: handle={handle}")
 
+    class OVERLAPPED(ctypes.Structure):
+        _fields_ = [("Internal", ctypes.c_void_p), ("InternalHigh", ctypes.c_void_p),
+                     ("Offset", ctypes.c_ulong), ("OffsetHigh", ctypes.c_ulong),
+                     ("hEvent", ctypes.c_void_p)]
+
     # Use DeviceIoControl with IOCTL_HID_SET_FEATURE (like Chromium!)
     IOCTL_HID_SET_FEATURE = 0x000b0197
     # Try multiple sizes
