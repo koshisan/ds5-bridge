@@ -521,6 +521,8 @@ class DS5Server:
             print(f"[DS5Server] Icon.run() error: {e}")
             import traceback
             traceback.print_exc()
+        print("[DS5Server] icon.run() returned - this should not happen")
+        input("Press Enter to exit...")
 
 
 if __name__ == '__main__':
