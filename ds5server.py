@@ -26,29 +26,6 @@ except ImportError:
     print("pip install pyaudiowpatch numpy scipy")
     sys.exit(1)
 
-
-# --- Shared Memory (driver status) ---
-import ctypes
-import ctypes.wintypes
-
-class DS5SharedStatus(ctypes.Structure):
-    _pack_ = 1
-    _fields_ = [
-        ('version', ctypes.c_uint32),
-        ('size', ctypes.c_uint32),
-        ('udp_port', ctypes.c_uint16),
-        ('client_ip', ctypes.c_uint8 * 4),
-        ('client_port', ctypes.c_uint16),
-        ('last_seen', ctypes.c_int64),
-        ('packets_in', ctypes.c_uint32),
-        ('packets_out', ctypes.c_uint32),
-        ('driver_active', ctypes.c_uint8),
-        ('reserved', ctypes.c_uint8 * 32),
-    ]
-
-DS5_SHARED_MEMORY_NAME = "Global\\DS5VirtualStatus"
-DS5_SHARED_VERSION = 1
-
 # --- Config ---
 CONFIG_DIR = Path(os.environ.get('APPDATA', '')) / 'DS5Bridge'
 CONFIG_FILE = CONFIG_DIR / 'config.json'
@@ -105,107 +82,6 @@ class DS5Server:
                 self._hid_enabled = hid
                 self._audio_enabled = audio
         threading.Thread(target=_do, daemon=True).start()
-
-    # --- Shared Memory ---
-    def read_shared_status(self):
-        """Read driver status from shared memory."""
-        try:
-            handle = ctypes.windll.kernel32.OpenFileMappingW(
-                0x0004,  # FILE_MAP_READ
-                False,
-                DS5_SHARED_MEMORY_NAME)
-            if not handle:
-                return None
-            ptr = ctypes.windll.kernel32.MapViewOfFile(
-                handle, 0x0004, 0, 0, ctypes.sizeof(DS5SharedStatus))
-            if not ptr:
-                ctypes.windll.kernel32.CloseHandle(handle)
-                return None
-            status = DS5SharedStatus.from_address(ptr)
-            # Copy to avoid dangling pointer
-            result = {
-                'version': status.version,
-                'udp_port': status.udp_port,
-                'client_ip': f'{status.client_ip[0]}.{status.client_ip[1]}.{status.client_ip[2]}.{status.client_ip[3]}',
-                'client_port': status.client_port,
-                'last_seen': status.last_seen,
-                'packets_in': status.packets_in,
-                'packets_out': status.packets_out,
-                'driver_active': status.driver_active,
-            }
-            ctypes.windll.kernel32.UnmapViewOfFile(ptr)
-            ctypes.windll.kernel32.CloseHandle(handle)
-            return result
-        except Exception:
-            return None
-
-    # --- Port Handoff ---
-    def _standby_loop(self):
-        """Listen on UDP port when driver is not loaded. Load driver when client connects."""
-        try:
-            self._standby_loop_inner()
-        except Exception as e:
-            print(f"[DS5Server] Standby loop error: {e}")
-            import traceback
-            traceback.print_exc()
-
-    def _standby_loop_inner(self):
-        TIMEOUT = 5 * 60  # 5 minutes idle timeout
-        port = self.config.get('haptic_port', 5555)  # Use main port, not haptic
-
-        while self.running:
-            # Check if driver is already active via shared memory
-            shared = self.read_shared_status()
-            if shared and shared['driver_active']:
-                # Driver is running, monitor via shared memory
-                now_ms = int(time.time() * 1000)
-                idle_ms = now_ms - shared['last_seen'] if shared['last_seen'] > 0 else 0
-
-                if idle_ms > TIMEOUT * 1000 and shared['last_seen'] > 0:
-                    print(f"[DS5Server] Client idle for {idle_ms//1000}s, unloading driver...")
-                    self.disable_driver(DRIVER_HWID)
-                    self._refresh_status()
-                    time.sleep(1)
-                    continue
-
-                # Update our display stats from shared memory
-                self.packets_sent = shared['packets_out']
-                self._shared_packets_in = shared['packets_in']
-                self._client_ip_display = shared['client_ip']
-                self._client_port_display = shared['client_port']
-                time.sleep(1)
-                continue
-
-            # Driver not loaded - listen for client ourselves
-            try:
-                standby_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                standby_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                standby_sock.settimeout(2.0)
-                standby_sock.bind(('0.0.0.0', port))
-                print(f"[DS5Server] Standby: listening on port {port} (driver not loaded)")
-
-                while self.running:
-                    try:
-                        data, addr = standby_sock.recvfrom(1024)
-                        if len(data) >= 64:
-                            print(f"[DS5Server] Client detected from {addr[0]}:{addr[1]}, loading driver...")
-                            standby_sock.close()
-                            time.sleep(0.3)  # Brief pause for port release
-                            self.enable_driver(DRIVER_HWID)
-                            self._refresh_status()
-                            time.sleep(2)  # Wait for driver to start + bind
-                            break
-                    except socket.timeout:
-                        continue
-                    except Exception as e:
-                        print(f"[DS5Server] Standby recv error: {e}")
-                        break
-            except OSError as e:
-                if e.errno == 10048:  # WSAEADDRINUSE - driver might be loading
-                    time.sleep(2)
-                else:
-                    print(f"[DS5Server] Standby bind error: {e}")
-                    time.sleep(5)
 
     # --- Driver Management ---
     def _run_elevated(self, cmd):
@@ -391,16 +267,6 @@ class DS5Server:
             print(f"[DS5Server] Autostart error: {e}")
 
     # --- Tray Icon ---
-    _shared_packets_in = 0
-    _client_ip_display = ''
-    _client_port_display = 0
-
-    def _get_client_display(self):
-        shared = self.read_shared_status()
-        if shared and shared['driver_active']:
-            return f'Client: {shared["client_ip"]}:{shared["client_port"]} (driver)'
-        return f'Client: waiting... (standby)'
-
     def _create_icon(self, color='green'):
         img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
@@ -415,7 +281,7 @@ class DS5Server:
     def _build_menu(self):
         return pystray.Menu(
             pystray.MenuItem(
-                lambda text: self._get_client_display(), None, enabled=False),
+                lambda text: f'Client: {self.config["client_ip"]}', None, enabled=False),
             pystray.MenuItem(
                 lambda text: f'Packets: {self.packets_sent} | Peak: {self.last_peak:.4f}', None, enabled=False),
             pystray.Menu.SEPARATOR,
@@ -502,27 +368,12 @@ class DS5Server:
             menu=self._build_menu()
         )
 
-        # Start standby/handoff loop in background
-        self.running = True
-        self._standby_thread = threading.Thread(target=self._standby_loop, daemon=True)
-        self._standby_thread.start()
-
-        # Auto-start capture (haptic audio)
-        try:
-            self.start_capture()
-        except Exception as e:
-            print(f"[DS5Server] Capture start failed: {e}")
+        # Auto-start capture
+        self.start_capture()
         self.icon.icon = self._create_icon('green')
 
         print("[DS5Server] Tray app running")
-        try:
-            self.icon.run()
-        except Exception as e:
-            print(f"[DS5Server] Icon.run() error: {e}")
-            import traceback
-            traceback.print_exc()
-        print("[DS5Server] icon.run() returned - this should not happen")
-        input("Press Enter to exit...")
+        self.icon.run()
 
 
 if __name__ == '__main__':
