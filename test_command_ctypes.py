@@ -142,16 +142,83 @@ if ok:
 
 # Now try SET with FeatureReportByteLength
     flen = caps.FeatureReportByteLength
+    ctypes.windll.hid.HidD_FreePreparsedData(pp)
+
+    # Close and reopen with FILE_FLAG_OVERLAPPED (like Chromium does)
+    ctypes.windll.kernel32.CloseHandle(handle)
+    FILE_FLAG_OVERLAPPED = 0x40000000
+    handle = ctypes.windll.kernel32.CreateFileW(
+        ds5_path, GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, None, OPEN_EXISTING,
+        FILE_FLAG_OVERLAPPED, None)
+    print(f"\nReopened with OVERLAPPED: handle={handle}")
+
+    # Use DeviceIoControl with IOCTL_HID_SET_FEATURE (like Chromium!)
+    IOCTL_HID_SET_FEATURE = 0x000B0110
     buf = (ctypes.c_ubyte * flen)()
     buf[0] = 0x80
     buf[1] = 0x09
     buf[2] = 0x02
-    ctypes.windll.kernel32.SetLastError(0)
-    ok = HidD_SetFeature(handle, buf, flen)
-    err = ctypes.GetLastError()
-    print(f"\nSET 0x80 size={flen} (from caps): ok={ok} err={err}")
 
-    ctypes.windll.hid.HidD_FreePreparsedData(pp)
+    class OVERLAPPED(ctypes.Structure):
+        _fields_ = [("Internal", ctypes.c_void_p), ("InternalHigh", ctypes.c_void_p),
+                     ("Offset", ctypes.c_ulong), ("OffsetHigh", ctypes.c_ulong),
+                     ("hEvent", ctypes.c_void_p)]
+
+    overlapped = OVERLAPPED()
+    event = ctypes.windll.kernel32.CreateEventW(None, True, False, None)
+    overlapped.hEvent = event
+
+    ctypes.windll.kernel32.SetLastError(0)
+    bytesReturned = ctypes.c_ulong(0)
+    ok = ctypes.windll.kernel32.DeviceIoControl(
+        handle, IOCTL_HID_SET_FEATURE,
+        buf, flen,
+        None, 0,
+        ctypes.byref(bytesReturned),
+        ctypes.byref(overlapped))
+    err = ctypes.GetLastError()
+    print(f"DeviceIoControl SET_FEATURE size={flen}: ok={ok} err={err}")
+
+    if not ok and err == 997:  # ERROR_IO_PENDING
+        print("IO_PENDING - waiting...")
+        ctypes.windll.kernel32.WaitForSingleObject(event, 5000)
+        ok2 = ctypes.windll.kernel32.GetOverlappedResult(
+            handle, ctypes.byref(overlapped), ctypes.byref(bytesReturned), False)
+        err2 = ctypes.GetLastError()
+        print(f"GetOverlappedResult: ok={ok2} err={err2} bytes={bytesReturned.value}")
+
+    # Now poll 0x81 using DeviceIoControl GET_FEATURE
+    IOCTL_HID_GET_FEATURE = 0x000B0120
+    for i in range(30):
+        time.sleep(0.01)
+        rbuf = (ctypes.c_ubyte * flen)()
+        rbuf[0] = 0x81
+        ov2 = OVERLAPPED()
+        ev2 = ctypes.windll.kernel32.CreateEventW(None, True, False, None)
+        ov2.hEvent = ev2
+        br2 = ctypes.c_ulong(0)
+        ctypes.windll.kernel32.SetLastError(0)
+        ok = ctypes.windll.kernel32.DeviceIoControl(
+            handle, IOCTL_HID_GET_FEATURE,
+            None, 0,
+            rbuf, flen,
+            ctypes.byref(br2),
+            ctypes.byref(ov2))
+        err = ctypes.GetLastError()
+        if not ok and err == 997:
+            ctypes.windll.kernel32.WaitForSingleObject(ev2, 1000)
+            ctypes.windll.kernel32.GetOverlappedResult(
+                handle, ctypes.byref(ov2), ctypes.byref(br2), False)
+        ctypes.windll.kernel32.CloseHandle(ev2)
+        data = bytes(rbuf)
+        if data[1] == 0x09 and data[2] == 0x02:
+            print(f"Poll {i}: MATCH! status={data[3]:#04x} data={data[:20].hex(' ')}")
+            break
+        elif i < 3:
+            print(f"Poll {i}: {data[:20].hex(' ')}")
+
+    ctypes.windll.kernel32.CloseHandle(event)
 
 # Poll GET 0x81
 for i in range(30):
