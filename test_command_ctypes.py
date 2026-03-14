@@ -97,14 +97,18 @@ HidD_GetFeature = ctypes.windll.hid.HidD_GetFeature
 HidD_GetFeature.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong]
 HidD_GetFeature.restype = ctypes.c_bool
 
-# SET 0x80
-buf = (ctypes.c_ubyte * 64)()
-buf[0] = 0x80
-buf[1] = 0x09  # SYSTEM
-buf[2] = 0x02  # READ_PCBAID
-print(f"\nHidD_SetFeature 0x80 [0x09, 0x02]...")
-ok = HidD_SetFeature(handle, buf, 64)
-print(f"Result: {ok}, LastError: {ctypes.GetLastError()}")
+# Try different buffer sizes for SET 0x80
+for size in [64, 65, 78, 334]:
+    buf = (ctypes.c_ubyte * size)()
+    buf[0] = 0x80
+    buf[1] = 0x09  # SYSTEM
+    buf[2] = 0x02  # READ_PCBAID
+    ctypes.windll.kernel32.SetLastError(0)
+    ok = HidD_SetFeature(handle, buf, size)
+    err = ctypes.GetLastError()
+    print(f"SET 0x80 size={size}: ok={ok} err={err}")
+    if ok:
+        break
 
 # Poll GET 0x81
 for i in range(30):
