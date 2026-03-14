@@ -58,6 +58,14 @@ for idx in range(100):
 SetupDiDestroyDeviceInfoList(hdev_info)
 
 if not ds5_path:
+    # BT path format differs - get from hidapi
+    import hid as _hid
+    for d in _hid.enumerate(0x054C, 0x0CE6):
+        ds5_path = d['path'].decode('utf-8') if isinstance(d['path'], bytes) else d['path']
+        print(f"Using hidapi path: {ds5_path}")
+        break
+
+if not ds5_path:
     print("DS5 not found!")
     exit(1)
 
