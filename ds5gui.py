@@ -213,14 +213,20 @@ class DS5Server:
                 idle_s = (now_ms - shared['last_seen']) / 1000.0
 
                 if idle_s > timeout:
-                    print(f"[DS5] Client idle {idle_s:.0f}s, auto-disabling...")
-                    self._handoff_status = f'idle {idle_s:.0f}s -> standby'
+                    self._handoff_status = f'idle {idle_s:.0f}s, waiting to unload...'
+
+                    if self.config.get('auto_capture', True) and self.capturing:
+                        print("[DS5] Auto-stopping capture (idle)")
+                        self.stop_capture()
 
                     if self.config.get('auto_enable_hid', True):
-                        self.disable_driver(DRIVER_HWID)
-
-                    if self.config.get('auto_capture', True):
-                        self.stop_capture()
+                        ok, msg = self.disable_driver(DRIVER_HWID)
+                        if ok:
+                            print(f"[DS5] HID driver unloaded after {idle_s:.0f}s idle")
+                            self._handoff_status = 'standby (driver unloaded)'
+                        else:
+                            self._handoff_status = f'idle {idle_s:.0f}s, device busy'
+                            time.sleep(5)  # retry less aggressively
                 else:
                     self._handoff_status = f'active, idle {idle_s:.0f}s / {timeout}s'
             time.sleep(1)
