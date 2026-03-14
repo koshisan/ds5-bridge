@@ -272,31 +272,37 @@ class DS5Server:
         def reader():
             nonlocal seq, send_until, bytes_from_ffmpeg
             print(f"[DS5Server] Reader thread started, reading {PACKET_SIZE}-byte blocks...")
+            read_buf = bytearray()
             while self.running and ffproc.poll() is None:
                 try:
-                    data = ffproc.stdout.read(PACKET_SIZE)
-                    if not data or len(data) < PACKET_SIZE:
-                        print(f"[DS5Server] Reader: got {len(data) if data else 0} bytes (expected {PACKET_SIZE}), ffmpeg exit={ffproc.poll()}")
+                    chunk = ffproc.stdout.read(PACKET_SIZE)
+                    if not chunk:
+                        print(f"[DS5Server] Reader: EOF from ffmpeg, exit={ffproc.poll()}")
                         break
-                    bytes_from_ffmpeg += len(data)
+                    read_buf.extend(chunk)
+                    bytes_from_ffmpeg += len(chunk)
 
-                    # Silence gate: check if any sample deviates from center
-                    has_signal = any(abs(b - 128) > 3 for b in data)
+                    # Process complete packets
+                    while len(read_buf) >= PACKET_SIZE:
+                        data = bytes(read_buf[:PACKET_SIZE])
+                        read_buf = read_buf[PACKET_SIZE:]
 
-                    now = time.time()
-                    if has_signal:
-                        send_until = now + 1.0
-                        # Calculate peak for display
-                        self.last_peak = max(abs(b - 128) for b in data) / 128.0
+                        # Silence gate: check if any sample deviates from center
+                        has_signal = any(abs(b - 128) > 3 for b in data)
 
-                    if now < send_until:
-                        packet = bytes([0x32, seq & 0xFF]) + data
-                        self.sock.sendto(packet, target)
-                        seq = (seq + 1) & 0xFF
-                        self.packets_sent += 1
+                        now = time.time()
+                        if has_signal:
+                            send_until = now + 1.0
+                            self.last_peak = max(abs(b - 128) for b in data) / 128.0
 
-                    if bytes_from_ffmpeg % (PACKET_SIZE * 100) == 0:
-                        print(f"[DS5Server] ffmpeg: {bytes_from_ffmpeg}B read, {self.packets_sent} pkts sent, peak={self.last_peak:.3f}, signal={'YES' if has_signal else 'no'}")
+                        if now < send_until:
+                            packet = bytes([0x32, seq & 0xFF]) + data
+                            self.sock.sendto(packet, target)
+                            seq = (seq + 1) & 0xFF
+                            self.packets_sent += 1
+
+                        if self.packets_sent > 0 and self.packets_sent % 100 == 0:
+                            print(f"[DS5Server] sent {self.packets_sent} pkts, peak={self.last_peak:.3f}")
                 except Exception as e:
                     print(f"[DS5Server] Reader error: {e}")
                     break
