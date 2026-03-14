@@ -54,7 +54,6 @@ def output_receiver(sock, dev, is_bt, haptic_queue=None):
             if len(data) < 2:
                 continue
             # Debug: log ALL received packets
-            print(f'  [RECV] {len(data)}B first=0x{data[0]:02X} from {addr}', flush=True)
 
             # Route 0x32 haptic packets to haptic handler
             if data[0] == 0x32 and haptic_queue is not None:
@@ -74,9 +73,7 @@ def output_receiver(sock, dev, is_bt, haptic_queue=None):
                             resp_bytes = resp_bytes  # keep as-is, driver expects it
                         pkt = bytes([0x04, report_id]) + resp_bytes
                         sock.sendto(pkt, addr)
-                        print(f'  [FEATURE] GET 0x{report_id:02X} -> {len(resp_bytes)}B: {resp_bytes[:20].hex(chr(32))}')
                     else:
-                        print(f'  [FEATURE] GET 0x{report_id:02X} -> empty')
                 except Exception as e:
                     print(f'  [FEATURE] GET 0x{report_id:02X} error: {e}')
                 continue
@@ -85,7 +82,6 @@ def output_receiver(sock, dev, is_bt, haptic_queue=None):
             if data[0] == 0x05 and len(data) >= 2:
                 report_id = data[1]
                 payload = data[1:]  # includes report ID
-                print(f'  [FEATURE] SET 0x{report_id:02X} ({len(payload)}B): {bytes(payload[:16]).hex(chr(32))}')
                 try:
                     if is_bt:
                         # DS5 BT feature SET needs payload CRC32
@@ -100,7 +96,6 @@ def output_receiver(sock, dev, is_bt, haptic_queue=None):
                         crc = ds5_crc32_payload([0x53, report_id], buf[1:60])
                         struct.pack_into('<I', buf, 60, crc)
                         dev.send_feature_report(bytes(buf))
-                        print(f'  [FEATURE] SET 0x{report_id:02X} BT+CRC ({len(buf)}B)')
                     else:
                         dev.send_feature_report(payload)
                 except Exception as e:
@@ -133,7 +128,6 @@ def output_receiver(sock, dev, is_bt, haptic_queue=None):
 
             out_count += 1
             h = data[:10].hex(" ")
-            print(f"  [OUTPUT] #{out_count} {len(data)}B: {h}")
 
         except ConnectionResetError:
             # ICMP port unreachable from server - ignore, server may not be up yet
