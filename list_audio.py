@@ -1,7 +1,5 @@
-import pyaudiowpatch as pyaudio
-p = pyaudio.PyAudio()
-for i in range(p.get_device_count()):
-    info = p.get_device_info_by_index(i)
-    if '2-' in info['name'] or 'DualSense' in info['name']:
-        print(f"[{i}] {info['name']}  loop={info.get('isLoopbackDevice')}  ch_in={info['maxInputChannels']}  ch_out={info['maxOutputChannels']}")
-p.terminate()
+import sounddevice as sd
+for i, d in enumerate(sd.query_devices()):
+    if 'DualSense' in d['name']:
+        api = sd.query_hostapis(d['hostapi'])['name']
+        print(f"[{i}] {d['name']} in={d['max_input_channels']} out={d['max_output_channels']} ({api})")
