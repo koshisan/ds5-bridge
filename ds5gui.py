@@ -72,7 +72,6 @@ class DS5SharedStatus(ctypes.Structure):
     ]
 
 
-print('[1] imports done')
 
 class DS5Server:
     def __init__(self):
@@ -279,31 +278,20 @@ class DS5Server:
             print(f"[DS5] Autostart error: {e}")
 
 
-print('[2] DS5Server class defined')
 
 class DS5GUI:
     def __init__(self):
-        print('[4a] DS5GUI.__init__')
         self.server = DS5Server()
-        print('[4b] DS5Server created')
-        print('[4c] creating tk.Tk')
         self.root = tk.Tk()
-        print('[4d] tk.Tk created')
         self.root.title("DS5 Bridge Server")
         self.root.geometry("480x400")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-        print('[4e] building UI')
         self._build_ui()
-        print('[4f] UI built')
-        print('[4g] starting update loop')
         self._update_loop()
-        print('[4h] update loop started')
 
         # Auto-start capture
-        print('[4i] starting capture')
         self.server.start_capture()
-        print('[4j] capture started')
 
     def _build_ui(self):
         # --- Status Frame ---
@@ -387,7 +375,6 @@ class DS5GUI:
 
         # Shared memory
         try:
-            print('[UPD] about to read shared memory')
             shared = self.server.read_shared_status()
             print(f'[UPD] shared = {shared}')
             if shared and shared['driver_active']:
@@ -429,9 +416,7 @@ class DS5GUI:
         if self.server.capturing:
             self.server.stop_capture()
         else:
-            print('[4i] starting capture')
         self.server.start_capture()
-        print('[4j] capture started')
 
     def _update_threshold(self):
         try:
@@ -456,15 +441,11 @@ class DS5GUI:
 
 
 
-print('[3] DS5GUI class defined')
 
 if __name__ == '__main__':
     try:
-        print('[4] creating DS5GUI')
         gui = DS5GUI()
-        print('[5] calling gui.run()')
         gui.run()
-        print('[6] gui.run() returned')
     except Exception as e:
         import traceback
         traceback.print_exc()
