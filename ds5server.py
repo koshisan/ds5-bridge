@@ -142,6 +142,14 @@ class DS5Server:
     # --- Port Handoff ---
     def _standby_loop(self):
         """Listen on UDP port when driver is not loaded. Load driver when client connects."""
+        try:
+            self._standby_loop_inner()
+        except Exception as e:
+            print(f"[DS5Server] Standby loop error: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _standby_loop_inner(self):
         TIMEOUT = 5 * 60  # 5 minutes idle timeout
         port = self.config.get('haptic_port', 5555)  # Use main port, not haptic
 
@@ -500,11 +508,19 @@ class DS5Server:
         self._standby_thread.start()
 
         # Auto-start capture (haptic audio)
-        self.start_capture()
+        try:
+            self.start_capture()
+        except Exception as e:
+            print(f"[DS5Server] Capture start failed: {e}")
         self.icon.icon = self._create_icon('green')
 
         print("[DS5Server] Tray app running")
-        self.icon.run()
+        try:
+            self.icon.run()
+        except Exception as e:
+            print(f"[DS5Server] Icon.run() error: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 if __name__ == '__main__':
