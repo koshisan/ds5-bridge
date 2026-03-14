@@ -224,9 +224,15 @@ class DS5Server:
 
                     if self.config.get('auto_enable_hid', True):
                         self.set_disconnect(True)
-                        print(f"[DS5] Virtual disconnect after {idle_s:.0f}s idle")
-                        self._handoff_status = 'disconnected (idle)'
-                        time.sleep(5)
+                        time.sleep(1)
+                        ok, msg = self.disable_driver(DRIVER_HWID)
+                        if ok:
+                            print(f"[DS5] HID driver unloaded after {idle_s:.0f}s idle")
+                            self._handoff_status = 'standby (unloaded)'
+                        else:
+                            print(f"[DS5] Virtual disconnect (driver busy)")
+                            self._handoff_status = 'disconnected (device busy)'
+                            time.sleep(5)
                 else:
                     self._handoff_status = f'active, idle {idle_s:.0f}s / {timeout}s'
             time.sleep(1)
@@ -404,6 +410,21 @@ class DS5GUI:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._build_ui()
         self._update_loop()
+
+        # Startup check: disable HID driver if no client connected
+        if self.server.config.get('auto_enable_hid', True):
+            shared = self.server.read_shared_status()
+            if shared and shared['driver_active'] and shared['packets_in'] == 0:
+                print("[DS5] No client at startup, disabling HID driver...")
+                self.server.disable_driver(DRIVER_HWID)
+            elif shared and shared['driver_active'] and shared['packets_in'] > 0:
+                now_ms = int(time.time() * 1000)
+                idle_s = (now_ms - shared['last_seen']) / 1000.0
+                if idle_s > self.server.config.get('idle_timeout', 10):
+                    print(f"[DS5] Client idle {idle_s:.0f}s at startup, disabling HID driver...")
+                    self.server.set_disconnect(True)
+                    time.sleep(1)
+                    self.server.disable_driver(DRIVER_HWID)
 
         # Start port listener and idle monitor
         self.server._start_listener()
