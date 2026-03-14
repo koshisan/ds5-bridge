@@ -136,8 +136,10 @@ class DS5Server:
                 break
         return p, ds5_lb
 
-    def _float_to_uint8(self, f):
-        return max(0, min(255, int(f * self.config['gain'] * 127 + 128)))
+    @staticmethod
+    def _s16_to_u8(s16):
+        """Convert signed 16-bit to unsigned 8-bit (same as Sony's conversion)."""
+        return ((s16 >> 8) + 128) & 0xFF
 
     def _capture_loop(self):
         from scipy.signal import resample
@@ -150,19 +152,19 @@ class DS5Server:
 
         channels = int(ds5_lb['maxInputChannels'])
         rate = int(ds5_lb['defaultSampleRate'])
-        downsample_ratio = rate // 3000
         sample_buffer = bytearray()
         seq = 0
         target = (self.config['client_ip'], self.config['haptic_port'])
+        target_samples = 3000  # DS5 haptic sample rate
 
-        print(f"[DS5Server] Capture: {channels}ch {rate}Hz -> {target}")
+        print(f"[DS5Server] Capture: {channels}ch {rate}Hz S16 -> {target}")
 
         def send_packet():
-            nonlocal seq, sample_buffer
+            nonlocal seq
             if len(sample_buffer) < 64:
                 return
             audio_data = bytes(sample_buffer[:64])
-            sample_buffer = sample_buffer[64:]
+            del sample_buffer[:64]
             packet = bytes([0x32, seq & 0xFF]) + audio_data
             self.sock.sendto(packet, target)
             seq = (seq + 1) & 0xFF
@@ -172,21 +174,27 @@ class DS5Server:
             if not self.running:
                 return (None, pyaudio.paComplete)
 
-            data = np.frombuffer(in_data, dtype=np.float32).reshape(-1, channels)
-            left = data[:, 0]
-            right = data[:, 1] if channels >= 2 else left
+            # Parse S16 interleaved samples
+            samples = np.frombuffer(in_data, dtype=np.int16).reshape(-1, channels)
+            left = samples[:, 0].astype(np.float64)
+            right = samples[:, 1].astype(np.float64) if channels >= 2 else left
+
+            # Peak detection (normalized to 0-1 range for display)
+            peak = max(np.max(np.abs(left)), np.max(np.abs(right))) / 32768.0
+            self.last_peak = peak
 
             # Resample 48kHz -> 3kHz
-            target_len = len(left) // downsample_ratio
+            target_len = int(len(left) * target_samples / rate)
             if target_len > 0:
                 left_ds = resample(left, target_len)
                 right_ds = resample(right, target_len)
-                for i in range(target_len):
-                    sample_buffer.append(self._float_to_uint8(left_ds[i]))
-                    sample_buffer.append(self._float_to_uint8(right_ds[i]))
 
-            peak = max(np.max(np.abs(left)), np.max(np.abs(right)))
-            self.last_peak = peak
+                # S16 -> u8 conversion (Sony style)
+                for i in range(target_len):
+                    l_s16 = int(np.clip(left_ds[i], -32768, 32767))
+                    r_s16 = int(np.clip(right_ds[i], -32768, 32767))
+                    sample_buffer.append(self._s16_to_u8(l_s16))
+                    sample_buffer.append(self._s16_to_u8(r_s16))
 
             now = time.time()
             if peak > self.config['threshold']:
@@ -202,12 +210,12 @@ class DS5Server:
 
         try:
             stream = p.open(
-                format=pyaudio.paFloat32,
+                format=pyaudio.paInt16,
                 channels=channels,
                 rate=rate,
                 input=True,
                 input_device_index=ds5_lb['index'],
-                frames_per_buffer=self.config['buffer_size'],
+                frames_per_buffer=256,
                 stream_callback=callback
             )
             stream.start_stream()
