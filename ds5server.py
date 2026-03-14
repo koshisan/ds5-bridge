@@ -345,7 +345,7 @@ class DS5Server:
     def _build_menu(self):
         return pystray.Menu(
             pystray.MenuItem(
-                lambda text: f'Client: {self.config["client_ip"]}', None, enabled=False),
+                lambda text: f'Client: {self.config["client_ip"]} | Shared: {self.read_shared_status() is not None}', None, enabled=False),
             pystray.MenuItem(
                 lambda text: f'Packets: {self.packets_sent} | Peak: {self.last_peak:.4f}', None, enabled=False),
             pystray.Menu.SEPARATOR,
