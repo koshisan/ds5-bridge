@@ -39,6 +39,8 @@ DEFAULT_CONFIG = {
     'gain': 500.0,
     'threshold': 0.009,
     'autostart': False,
+    'auto_enable_hid': True,
+    'auto_enable_audio': True,
 }
 
 def load_config():
@@ -284,7 +286,7 @@ class DS5GUI:
         self.server = DS5Server()
         self.root = tk.Tk()
         self.root.title("DS5 Bridge Server")
-        self.root.geometry("480x400")
+        self.root.geometry("520x480")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._build_ui()
@@ -324,19 +326,35 @@ class DS5GUI:
         drv_frame = ttk.LabelFrame(self.root, text="Drivers", padding=10)
         drv_frame.pack(fill='x', padx=10, pady=5)
 
-        self.lbl_hid = ttk.Label(drv_frame, text="HID: checking...")
-        self.lbl_hid.grid(row=0, column=0, sticky='w')
+        # HID Driver
+        ttk.Label(drv_frame, text="HID (DS5Virtual)", font=('', 9, 'bold')).grid(row=0, column=0, sticky='w', columnspan=3)
+        self.lbl_hid = ttk.Label(drv_frame, text="Status: checking...")
+        self.lbl_hid.grid(row=1, column=0, sticky='w')
+        self.lbl_hid_info = ttk.Label(drv_frame, text="", foreground='gray')
+        self.lbl_hid_info.grid(row=2, column=0, sticky='w', columnspan=3)
         ttk.Button(drv_frame, text="Enable", width=8,
-                   command=lambda: self._driver_action(DRIVER_HWID, True)).grid(row=0, column=1, padx=5)
+                   command=lambda: self._driver_action(DRIVER_HWID, True)).grid(row=1, column=1, padx=5)
         ttk.Button(drv_frame, text="Disable", width=8,
-                   command=lambda: self._driver_action(DRIVER_HWID, False)).grid(row=0, column=2)
+                   command=lambda: self._driver_action(DRIVER_HWID, False)).grid(row=1, column=2)
+        self.auto_hid_var = tk.BooleanVar(value=self.server.config.get('auto_enable_hid', True))
+        ttk.Checkbutton(drv_frame, text="Auto-Enable", variable=self.auto_hid_var,
+                       command=lambda: self._save_auto('auto_enable_hid', self.auto_hid_var.get())).grid(row=1, column=3, padx=10)
 
-        self.lbl_audio = ttk.Label(drv_frame, text="Audio: checking...")
-        self.lbl_audio.grid(row=1, column=0, sticky='w', pady=5)
+        ttk.Separator(drv_frame, orient='horizontal').grid(row=3, column=0, columnspan=4, sticky='ew', pady=5)
+
+        # Audio Driver
+        ttk.Label(drv_frame, text="Audio (DualSense Speaker)", font=('', 9, 'bold')).grid(row=4, column=0, sticky='w', columnspan=3)
+        self.lbl_audio = ttk.Label(drv_frame, text="Status: checking...")
+        self.lbl_audio.grid(row=5, column=0, sticky='w')
+        self.lbl_audio_info = ttk.Label(drv_frame, text="", foreground='gray')
+        self.lbl_audio_info.grid(row=6, column=0, sticky='w', columnspan=3)
         ttk.Button(drv_frame, text="Enable", width=8,
-                   command=lambda: self._driver_action(AUDIO_HWID, True)).grid(row=1, column=1, padx=5)
+                   command=lambda: self._driver_action(AUDIO_HWID, True)).grid(row=5, column=1, padx=5)
         ttk.Button(drv_frame, text="Disable", width=8,
-                   command=lambda: self._driver_action(AUDIO_HWID, False)).grid(row=1, column=2)
+                   command=lambda: self._driver_action(AUDIO_HWID, False)).grid(row=5, column=2)
+        self.auto_audio_var = tk.BooleanVar(value=self.server.config.get('auto_enable_audio', True))
+        ttk.Checkbutton(drv_frame, text="Auto-Enable", variable=self.auto_audio_var,
+                       command=lambda: self._save_auto('auto_enable_audio', self.auto_audio_var.get())).grid(row=5, column=3, padx=10)
 
         # --- Capture ---
         cap_frame = ttk.LabelFrame(self.root, text="Haptic Capture", padding=10)
@@ -400,16 +418,56 @@ class DS5GUI:
             self._refresh_drivers()
         threading.Thread(target=do, daemon=True).start()
 
+    def _save_auto(self, key, val):
+        self.server.config[key] = val
+        save_config(self.server.config)
+
+    def _get_driver_details(self, hwid):
+        """Get driver name, version, date via PowerShell."""
+        try:
+            result = subprocess.run(
+                ['powershell', '-Command',
+                 f'Get-PnpDevice | Where-Object {{ $_.HardwareID -contains "{hwid}" }} | Select-Object Status, FriendlyName, InstanceId | ConvertTo-Json'],
+                capture_output=True, text=True, errors='replace', timeout=8)
+            info = json.loads(result.stdout) if result.stdout.strip() else {}
+            name = info.get('FriendlyName', '?')
+            status = info.get('Status', '?')
+            iid = info.get('InstanceId', '')
+
+            # Get driver version + date
+            ver_result = subprocess.run(
+                ['powershell', '-Command',
+                 f'Get-PnpDeviceProperty -InstanceId "{iid}" -KeyName DEVPKEY_Device_DriverVersion, DEVPKEY_Device_DriverDate 2>$null | Select-Object KeyName, Data | ConvertTo-Json'],
+                capture_output=True, text=True, errors='replace', timeout=8)
+            props = json.loads(ver_result.stdout) if ver_result.stdout.strip() else []
+            if not isinstance(props, list):
+                props = [props]
+            version = '?'
+            date = '?'
+            for p in props:
+                if 'DriverVersion' in p.get('KeyName', ''):
+                    version = p.get('Data', '?')
+                if 'DriverDate' in p.get('KeyName', ''):
+                    d = p.get('Data', '')
+                    if d:
+                        date = d[:10] if len(d) >= 10 else d
+            return status, name, version, date
+        except Exception:
+            return '?', '?', '?', '?'
+
     def _refresh_drivers(self):
         def do():
-            hid = self.server.is_driver_enabled(DRIVER_HWID)
-            audio = self.server.is_driver_enabled(AUDIO_HWID)
-            self.root.after(0, lambda: self.lbl_hid.config(
-                text=f"HID: {'ON' if hid else 'OFF'}",
-                foreground='green' if hid else 'red'))
-            self.root.after(0, lambda: self.lbl_audio.config(
-                text=f"Audio: {'ON' if audio else 'OFF'}",
-                foreground='green' if audio else 'red'))
+            for hwid, lbl_status, lbl_info in [
+                (DRIVER_HWID, self.lbl_hid, self.lbl_hid_info),
+                (AUDIO_HWID, self.lbl_audio, self.lbl_audio_info),
+            ]:
+                status, name, version, date = self._get_driver_details(hwid)
+                is_on = status == 'OK'
+                self.root.after(0, lambda l=lbl_status, s=is_on: l.config(
+                    text=f"Status: {'ON' if s else 'OFF'}",
+                    foreground='green' if s else 'red'))
+                self.root.after(0, lambda l=lbl_info, n=name, v=version, d=date: l.config(
+                    text=f"{n}  |  v{v}  |  {d}"))
         threading.Thread(target=do, daemon=True).start()
 
     def _toggle_capture(self):
