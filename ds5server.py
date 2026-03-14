@@ -256,50 +256,52 @@ class DS5Server:
         return img
 
     def _build_menu(self):
-        capture_text = 'Stop Capture' if self.running else 'Start Capture'
-        hid_enabled = self.is_driver_enabled(DRIVER_HWID)
-        audio_enabled = self.is_driver_enabled(AUDIO_HWID)
-
         return pystray.Menu(
-            pystray.MenuItem(f'Client: {self.config["client_ip"]}', None, enabled=False),
-            pystray.MenuItem(f'Packets: {self.packets_sent} | Peak: {self.last_peak:.4f}', None, enabled=False),
+            pystray.MenuItem(
+                lambda text: f'Client: {self.config["client_ip"]}', None, enabled=False),
+            pystray.MenuItem(
+                lambda text: f'Packets: {self.packets_sent} | Peak: {self.last_peak:.4f}', None, enabled=False),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem(capture_text, self._toggle_capture),
+            pystray.MenuItem(
+                lambda text: 'Stop Capture' if self.running else 'Start Capture',
+                self._toggle_capture),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem(f'HID Driver {"[ON]" if hid_enabled else "[OFF]"}',
-                           pystray.Menu(
-                               pystray.MenuItem('Enable', lambda: self._set_driver(DRIVER_HWID, True)),
-                               pystray.MenuItem('Disable', lambda: self._set_driver(DRIVER_HWID, False)),
-                           )),
-            pystray.MenuItem(f'Audio Driver {"[ON]" if audio_enabled else "[OFF]"}',
-                           pystray.Menu(
-                               pystray.MenuItem('Enable', lambda: self._set_driver(AUDIO_HWID, True)),
-                               pystray.MenuItem('Disable', lambda: self._set_driver(AUDIO_HWID, False)),
-                           )),
+            pystray.MenuItem(
+                lambda text: f'HID Driver [{"ON" if self.is_driver_enabled(DRIVER_HWID) else "OFF"}]',
+                pystray.Menu(
+                    pystray.MenuItem('Enable', lambda: self._set_driver(DRIVER_HWID, True)),
+                    pystray.MenuItem('Disable', lambda: self._set_driver(DRIVER_HWID, False)),
+                )),
+            pystray.MenuItem(
+                lambda text: f'Audio Driver [{"ON" if self.is_driver_enabled(AUDIO_HWID) else "OFF"}]',
+                pystray.Menu(
+                    pystray.MenuItem('Enable', lambda: self._set_driver(AUDIO_HWID, True)),
+                    pystray.MenuItem('Disable', lambda: self._set_driver(AUDIO_HWID, False)),
+                )),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem('Gain',
-                           pystray.Menu(
-                               pystray.MenuItem('100', lambda: self._set_gain(100),
-                                   checked=lambda item: self.config['gain'] == 100),
-                               pystray.MenuItem('200', lambda: self._set_gain(200),
-                                   checked=lambda item: self.config['gain'] == 200),
-                               pystray.MenuItem('500', lambda: self._set_gain(500),
-                                   checked=lambda item: self.config['gain'] == 500),
-                               pystray.MenuItem('1000', lambda: self._set_gain(1000),
-                                   checked=lambda item: self.config['gain'] == 1000),
-                           )),
+                pystray.Menu(
+                    pystray.MenuItem('100', lambda: self._set_gain(100),
+                        checked=lambda item: self.config['gain'] == 100),
+                    pystray.MenuItem('200', lambda: self._set_gain(200),
+                        checked=lambda item: self.config['gain'] == 200),
+                    pystray.MenuItem('500', lambda: self._set_gain(500),
+                        checked=lambda item: self.config['gain'] == 500),
+                    pystray.MenuItem('1000', lambda: self._set_gain(1000),
+                        checked=lambda item: self.config['gain'] == 1000),
+                )),
             pystray.MenuItem('Threshold',
-                           pystray.Menu(
-                               pystray.MenuItem('0.005', lambda: self._set_threshold(0.005),
-                                   checked=lambda item: self.config['threshold'] == 0.005),
-                               pystray.MenuItem('0.009', lambda: self._set_threshold(0.009),
-                                   checked=lambda item: self.config['threshold'] == 0.009),
-                               pystray.MenuItem('0.015', lambda: self._set_threshold(0.015),
-                                   checked=lambda item: self.config['threshold'] == 0.015),
-                           )),
+                pystray.Menu(
+                    pystray.MenuItem('0.005', lambda: self._set_threshold(0.005),
+                        checked=lambda item: self.config['threshold'] == 0.005),
+                    pystray.MenuItem('0.009', lambda: self._set_threshold(0.009),
+                        checked=lambda item: self.config['threshold'] == 0.009),
+                    pystray.MenuItem('0.015', lambda: self._set_threshold(0.015),
+                        checked=lambda item: self.config['threshold'] == 0.015),
+                )),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem('Autostart', self._toggle_autostart,
-                           checked=lambda item: self.config.get('autostart', False)),
+                checked=lambda item: self.config.get('autostart', False)),
             pystray.MenuItem('Quit', self._quit),
         )
 
@@ -339,7 +341,7 @@ class DS5Server:
             'DS5Bridge',
             self._create_icon('yellow'),
             'DS5 Bridge Server',
-            self._build_menu()
+            menu=self._build_menu
         )
 
         # Auto-start capture
