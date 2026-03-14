@@ -76,7 +76,7 @@ class IAudioCaptureClient(IUnknown):
     _iid_ = IID_IAudioCaptureClient
     _methods_ = [
         COMMETHOD([], HRESULT, 'GetBuffer',
-            (['out'], POINTER(ctypes.c_void_p), 'ppData'),
+            (['out', 'retval'], POINTER(ctypes.c_void_p), 'ppData'),
             (['out'], POINTER(c_uint32), 'pNumFramesAvailable'),
             (['out'], POINTER(c_uint32), 'pdwFlags'),
             (['out'], POINTER(ctypes.c_ulonglong), 'pu64DevicePosition'),
@@ -84,7 +84,7 @@ class IAudioCaptureClient(IUnknown):
         COMMETHOD([], HRESULT, 'ReleaseBuffer',
             (['in'], c_uint32, 'NumFramesRead')),
         COMMETHOD([], HRESULT, 'GetNextPacketSize',
-            (['out'], POINTER(c_uint32), 'pNumFramesInNextPacket')),
+            (['out', 'retval'], POINTER(c_uint32), 'pNumFramesInNextPacket')),
     ]
 
 # Find DualSense
@@ -164,20 +164,18 @@ audio_client.Start()
 try:
     while True:
         time.sleep(0.01)
-        packet_size = c_uint32()
-        capture_client.GetNextPacketSize(byref(packet_size))
+        packet_size = capture_client.GetNextPacketSize()
 
-        while packet_size.value > 0:
-            data_ptr = c_void_p()
+        while packet_size > 0:
             frames = c_uint32()
             flags = c_uint32()
             dev_pos = ctypes.c_ulonglong()
             qpc_pos = ctypes.c_ulonglong()
 
-            capture_client.GetBuffer(byref(data_ptr), byref(frames), byref(flags),
+            data_ptr = capture_client.GetBuffer(byref(frames), byref(flags),
                                      byref(dev_pos), byref(qpc_pos))
 
-            if frames.value > 0 and data_ptr.value:
+            if frames.value > 0 and data_ptr:
                 n = frames.value * channels
                 buf = (ctypes.c_float * n).from_address(data_ptr.value)
                 data = np.ctypeslib.as_array(buf).reshape(-1, channels)
@@ -189,8 +187,7 @@ try:
                     print(f"\r{'|'.join(parts)}", end="", flush=True)
 
             capture_client.ReleaseBuffer(frames.value)
-            packet_size = c_uint32()
-        capture_client.GetNextPacketSize(byref(packet_size))
+            packet_size = capture_client.GetNextPacketSize()
 
 except KeyboardInterrupt:
     print("\nStopped.")
