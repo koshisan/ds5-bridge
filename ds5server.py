@@ -243,7 +243,8 @@ class DS5Server:
         try:
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
             if enabled:
-                exe = sys.executable
+                # Use pythonw.exe for no console window
+                exe = sys.executable.replace('python.exe', 'pythonw.exe')
                 script = os.path.abspath(__file__)
                 winreg.SetValueEx(key, 'DS5Bridge', 0, winreg.REG_SZ, f'"{exe}" "{script}"')
             else:
