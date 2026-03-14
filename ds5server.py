@@ -19,7 +19,12 @@ except ImportError:
     print("pip install pystray pillow")
     sys.exit(1)
 
-
+try:
+    import pyaudiowpatch as pyaudio
+    import numpy as np
+except ImportError:
+    print("pip install pyaudiowpatch numpy scipy")
+    sys.exit(1)
 
 # --- Config ---
 CONFIG_DIR = Path(os.environ.get('APPDATA', '')) / 'DS5Bridge'
@@ -32,6 +37,7 @@ DEFAULT_CONFIG = {
     'haptic_port': 5556,
     'gain': 500.0,
     'threshold': 0.009,
+    'buffer_size': 256,
     'autostart': False,
     'driver_enabled': True,
     'audio_driver_enabled': True,
@@ -66,8 +72,6 @@ class DS5Server:
         self._audio_enabled = False
         self._status_lock = threading.Lock()
         self._refresh_status()
-        self.ffmpeg_status = 'idle'
-        self.ffmpeg_proc = None
 
     def _refresh_status(self):
         """Refresh driver status in background."""
@@ -83,7 +87,7 @@ class DS5Server:
     def _run_elevated(self, cmd):
         """Run a command with admin privileges."""
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, errors='replace', shell=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
             return result.returncode == 0, result.stdout + result.stderr
         except Exception as e:
             return False, str(e)
@@ -93,7 +97,7 @@ class DS5Server:
             result = subprocess.run(
                 ['powershell', '-Command',
                  f'Get-PnpDevice | Where-Object {{ $_.HardwareID -contains "{hwid}" }} | Select-Object -ExpandProperty Status'],
-                capture_output=True, text=True, errors='replace', timeout=5)
+                capture_output=True, text=True, timeout=5)
             status = result.stdout.strip()
             return status == 'OK'
         except:
@@ -104,7 +108,7 @@ class DS5Server:
             result = subprocess.run(
                 ['powershell', '-Command',
                  f'Get-PnpDevice | Where-Object {{ $_.HardwareID -contains "{hwid}" }} | Select-Object -ExpandProperty InstanceId'],
-                capture_output=True, text=True, errors='replace', timeout=5)
+                capture_output=True, text=True, timeout=5)
             return result.stdout.strip()
         except:
             return None
@@ -121,101 +125,8 @@ class DS5Server:
             return self._run_elevated(f'pnputil /disable-device "{iid}"')
         return False, f"Device {hwid} not found"
 
-    # --- Audio Capture (ffmpeg) ---
-    def _find_ds5_speaker(self):
-        """Find DualSense virtual speaker name for ffmpeg."""
-        try:
-            result = subprocess.run(
-                ['powershell', '-Command',
-                 'Get-AudioDevice -List | Where-Object { $_.Name -like "*DualSense*" -and $_.Type -eq "Playback" } | Select-Object -ExpandProperty Name'],
-                capture_output=True, text=True, errors='replace', timeout=5)
-            name = result.stdout.strip()
-            if name:
-                return name
-        except:
-            pass
-        # Fallback: hardcoded name
-        return "Lautsprecher (2- DualSense Wireless Controller)"
-
-    def _build_ffmpeg_cmd(self):
-        """Build ffmpeg command for WASAPI loopback capture."""
-        # Use dshow audio device for loopback
-        gain = self.config['gain'] / 100.0  # normalize: config 500 = ffmpeg volume=5
-        return [
-            'ffmpeg', '-hide_banner', '-loglevel', 'warning',
-            '-f', 'dshow',
-            '-audio_buffer_size', '50',
-            '-i', f'audio=virtual-audio-capturer',
-            '-af', f'volume={gain:.1f}',
-            '-ac', '2',
-            '-ar', '3000',
-            '-f', 'u8',
-            'pipe:1'
-        ]
-
-    def _capture_loop(self):
-        PACKET_SIZE = 64  # 32 stereo samples
-        SILENCE_CENTER = 128
-        SILENCE_THRESHOLD = 3  # uint8 deviation from center
-        target = (self.config['client_ip'], self.config['haptic_port'])
-        seq = 0
-        restart_delay = 1.0
-        max_restart_delay = 30.0
-
-        while self.running:
-            # Try WASAPI loopback via ffmpeg
-            # First try: direct WASAPI (Windows built-in)
-            speaker_name = self._find_ds5_speaker()
-            
-            # ffmpeg WASAPI loopback capture
-            cmd = [
-                'ffmpeg', '-hide_banner', '-loglevel', 'warning',
-                '-f', 'dshow',
-                '-i', f'audio=@device_cm_{{0.0.0.00000000}}.{{*}}',
-                '-af', f'volume={self.config["gain"] / 100.0:.1f}',
-                '-ac', '2', '-ar', '3000', '-f', 'u8', 'pipe:1'
-            ]
-            
-            # Simpler approach: use the virtual audio cable loopback
-            # ffmpeg can capture from a specific audio device via dshow
-            cmd = [
-                'ffmpeg', '-hide_banner', '-loglevel', 'error',
-                '-f', 'dshow',
-                '-audio_buffer_size', '50',
-                '-i', f'audio=CABLE Output (VB-Audio Virtual Cable)',
-                '-af', f'volume={self.config["gain"] / 100.0:.1f}',
-                '-ac', '2', '-ar', '3000', '-f', 'u8', 'pipe:1'
-            ]
-
-            # Actually: use PowerShell to find the loopback device
-            # For now, use pyaudiowpatch just for device discovery, ffmpeg for processing
-            # Simplest: pipe from pyaudiowpatch raw capture to ffmpeg for resampling
-            
-            # CLEANEST APPROACH: Use ffmpeg with wasapi (if available) or audiotap
-            # ffmpeg on Windows doesn't have wasapi input natively
-            # Use the approach: capture raw with pyaudiowpatch, pipe to ffmpeg for resample
-            
-            # Actually simplest: just use ffmpeg with the virtual cable loopback name
-            # But we don't have a virtual cable...
-            
-            # OK, let's keep pyaudiowpatch for capture but pipe raw PCM to ffmpeg for resample
-            self._capture_loop_hybrid(target, seq)
-            
-            if not self.running:
-                break
-                
-            print(f"[DS5Server] Restarting capture in {restart_delay:.0f}s...")
-            time.sleep(restart_delay)
-            restart_delay = min(restart_delay * 2, max_restart_delay)
-
-    def _capture_loop_hybrid(self, target, seq):
-        """Capture via pyaudiowpatch, resample via ffmpeg subprocess."""
-        try:
-            import pyaudiowpatch as pyaudio
-        except ImportError:
-            print("[DS5Server] pip install pyaudiowpatch")
-            return
-
+    # --- Audio Capture ---
+    def _find_loopback(self):
         p = pyaudio.PyAudio()
         ds5_lb = None
         for i in range(p.get_device_count()):
@@ -223,7 +134,15 @@ class DS5Server:
             if ('2- DualSense' in info['name'] or '2-DualSense' in info['name']) and info.get('isLoopbackDevice'):
                 ds5_lb = info
                 break
+        return p, ds5_lb
 
+    def _float_to_uint8(self, f):
+        return max(0, min(255, int(f * self.config['gain'] * 127 + 128)))
+
+    def _capture_loop(self):
+        from scipy.signal import resample
+
+        p, ds5_lb = self._find_loopback()
         if not ds5_lb:
             print("[DS5Server] DualSense loopback not found!")
             p.terminate()
@@ -231,106 +150,54 @@ class DS5Server:
 
         channels = int(ds5_lb['maxInputChannels'])
         rate = int(ds5_lb['defaultSampleRate'])
+        downsample_ratio = rate // 3000
+        sample_buffer = bytearray()
+        seq = 0
+        target = (self.config['client_ip'], self.config['haptic_port'])
 
-        # Start ffmpeg for resampling: stdin=raw f32le 48kHz 2ch -> stdout=u8 3kHz 2ch
-        gain = self.config['gain'] / 100.0
-        ffmpeg_cmd = [
-            'ffmpeg', '-hide_banner', '-loglevel', 'error',
-            '-f', 'f32le', '-ar', str(rate), '-ac', str(channels),
-            '-i', 'pipe:0',
-            '-af', f'volume={gain:.1f}',
-            '-ac', '2', '-ar', '3000',
-            '-f', 'u8',
-            'pipe:1'
-        ]
+        print(f"[DS5Server] Capture: {channels}ch {rate}Hz -> {target}")
 
-        print(f"[DS5Server] ffmpeg: {' '.join(ffmpeg_cmd)}")
-        self.ffmpeg_status = 'starting'
-        
-        try:
-            ffproc = subprocess.Popen(
-                ffmpeg_cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                bufsize=0,
-                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
-            )
-        except FileNotFoundError:
-            print("[DS5Server] ffmpeg not found! Install ffmpeg and add to PATH.")
-            self.ffmpeg_status = 'error: not found'
-            p.terminate()
-            return
+        def send_packet():
+            nonlocal seq, sample_buffer
+            if len(sample_buffer) < 64:
+                return
+            audio_data = bytes(sample_buffer[:64])
+            sample_buffer = sample_buffer[64:]
+            packet = bytes([0x32, seq & 0xFF]) + audio_data
+            self.sock.sendto(packet, target)
+            seq = (seq + 1) & 0xFF
+            self.packets_sent += 1
 
-        self.ffmpeg_status = 'running'
-        self.ffmpeg_proc = ffproc
-        PACKET_SIZE = 64
-        send_until = 0.0
-
-        # Reader thread: read ffmpeg stdout and send UDP
-        bytes_from_ffmpeg = 0
-        def reader():
-            nonlocal seq, send_until, bytes_from_ffmpeg
-            print(f"[DS5Server] Reader thread started, reading {PACKET_SIZE}-byte blocks...")
-            read_buf = bytearray()
-            while self.running and ffproc.poll() is None:
-                try:
-                    chunk = ffproc.stdout.read(PACKET_SIZE)
-                    if not chunk:
-                        print(f"[DS5Server] Reader: EOF from ffmpeg, exit={ffproc.poll()}")
-                        break
-                    read_buf.extend(chunk)
-                    bytes_from_ffmpeg += len(chunk)
-
-                    # Process complete packets
-                    while len(read_buf) >= PACKET_SIZE:
-                        data = bytes(read_buf[:PACKET_SIZE])
-                        read_buf = read_buf[PACKET_SIZE:]
-
-                        # Silence gate: check if any sample deviates from center
-                        has_signal = any(abs(b - 128) > 3 for b in data)
-
-                        now = time.time()
-                        if has_signal:
-                            send_until = now + 1.0
-                            self.last_peak = max(abs(b - 128) for b in data) / 128.0
-
-                        if now < send_until:
-                            packet = bytes([0x32, seq & 0xFF]) + data
-                            self.sock.sendto(packet, target)
-                            seq = (seq + 1) & 0xFF
-                            self.packets_sent += 1
-
-                        if self.packets_sent > 0 and self.packets_sent % 100 == 0:
-                            print(f"[DS5Server] sent {self.packets_sent} pkts, peak={self.last_peak:.3f}")
-                except Exception as e:
-                    print(f"[DS5Server] Reader error: {e}")
-                    break
-
-            print(f"[DS5Server] Reader done. Total: {bytes_from_ffmpeg}B from ffmpeg, {self.packets_sent} pkts sent")
-            self.ffmpeg_status = 'stopped'
-
-        reader_thread = threading.Thread(target=reader, daemon=True)
-        reader_thread.start()
-
-        # Writer: capture audio and feed to ffmpeg stdin
-        bytes_to_ffmpeg = 0
         def callback(in_data, frame_count, time_info, status):
-            nonlocal bytes_to_ffmpeg
             if not self.running:
                 return (None, pyaudio.paComplete)
-            try:
-                if ffproc.poll() is None:
-                    ffproc.stdin.write(in_data)
-                    bytes_to_ffmpeg += len(in_data)
-                    if bytes_to_ffmpeg % (len(in_data) * 200) == 0:
-                        print(f"[DS5Server] -> ffmpeg stdin: {bytes_to_ffmpeg}B written")
-                else:
-                    print(f"[DS5Server] ffmpeg died! exit={ffproc.returncode}")
-                    return (None, pyaudio.paComplete)
-            except (BrokenPipeError, OSError) as e:
-                print(f"[DS5Server] stdin write error: {e}")
-                return (None, pyaudio.paComplete)
+
+            data = np.frombuffer(in_data, dtype=np.float32).reshape(-1, channels)
+            left = data[:, 0]
+            right = data[:, 1] if channels >= 2 else left
+
+            # Resample 48kHz -> 3kHz
+            target_len = len(left) // downsample_ratio
+            if target_len > 0:
+                left_ds = resample(left, target_len)
+                right_ds = resample(right, target_len)
+                for i in range(target_len):
+                    sample_buffer.append(self._float_to_uint8(left_ds[i]))
+                    sample_buffer.append(self._float_to_uint8(right_ds[i]))
+
+            peak = max(np.max(np.abs(left)), np.max(np.abs(right)))
+            self.last_peak = peak
+
+            now = time.time()
+            if peak > self.config['threshold']:
+                self.send_until = now + 1.0
+
+            if now < self.send_until:
+                while len(sample_buffer) >= 64:
+                    send_packet()
+            else:
+                sample_buffer.clear()
+
             return (None, pyaudio.paContinue)
 
         try:
@@ -340,39 +207,18 @@ class DS5Server:
                 rate=rate,
                 input=True,
                 input_device_index=ds5_lb['index'],
-                frames_per_buffer=256,
+                frames_per_buffer=self.config['buffer_size'],
                 stream_callback=callback
             )
             stream.start_stream()
-            print(f"[DS5Server] Capture active: {channels}ch {rate}Hz -> ffmpeg -> {target}")
-
-            while self.running and stream.is_active() and ffproc.poll() is None:
+            while self.running and stream.is_active():
                 time.sleep(0.1)
-
             stream.stop_stream()
             stream.close()
         except Exception as e:
             print(f"[DS5Server] Capture error: {e}")
         finally:
-            try:
-                ffproc.stdin.close()
-            except:
-                pass
-            # Read any ffmpeg error output
-            try:
-                err = ffproc.stderr.read(4096)
-                if err:
-                    print(f"[DS5Server] ffmpeg stderr: {err}")
-            except:
-                pass
-            ffproc.terminate()
-            try:
-                ffproc.wait(timeout=3)
-            except:
-                ffproc.kill()
-            reader_thread.join(timeout=2)
             p.terminate()
-            self.ffmpeg_status = 'stopped'
             print("[DS5Server] Capture stopped")
 
     def start_capture(self):
@@ -429,7 +275,7 @@ class DS5Server:
             pystray.MenuItem(
                 lambda text: f'Client: {self.config["client_ip"]}', None, enabled=False),
             pystray.MenuItem(
-                lambda text: f'Packets: {self.packets_sent} | Peak: {self.last_peak:.3f} | ffmpeg: {self.ffmpeg_status}', None, enabled=False),
+                lambda text: f'Packets: {self.packets_sent} | Peak: {self.last_peak:.4f}', None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
                 lambda text: 'Stop Capture' if self.running else 'Start Capture',
@@ -489,18 +335,10 @@ class DS5Server:
             ok, msg = self.disable_driver(hwid)
         print(f"[DS5Server] {'Enable' if enable else 'Disable'} {hwid}: {ok} - {msg.strip()}")
         self._refresh_status()
-        self.ffmpeg_status = 'idle'
-        self.ffmpeg_proc = None
 
     def _set_gain(self, val):
         self.config['gain'] = float(val)
         save_config(self.config)
-        # Restart capture with new gain
-        if self.running:
-            self.stop_capture()
-            time.sleep(0.5)
-            self.start_capture()
-            self.icon.icon = self._create_icon('green')
 
     def _set_threshold(self, val):
         self.config['threshold'] = val
