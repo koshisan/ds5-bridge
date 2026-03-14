@@ -1,82 +1,48 @@
-"""Listen to DualSense virtual speaker via WASAPI loopback (4ch)."""
-import comtypes
+"""Listen to DualSense virtual speaker - 4ch WASAPI loopback via sounddevice."""
+import sounddevice as sd
 import numpy as np
-import time
 import sys
 
-# Initialize COM
-comtypes.CoInitialize()
-
-from comtypes import CLSCTX_ALL
-from pycaw.pycaw import AudioUtilities, IMMDeviceEnumerator, EDataFlow, ERole
-from pycaw.constants import CLSID_MMDeviceEnumerator
-import ctypes
-
 # Find DualSense output device
-devices = AudioUtilities.GetAllDevices()
-ds5_dev = None
-for d in devices:
-    if d.FriendlyName and ('2- DualSense' in d.FriendlyName or '2-DualSense' in d.FriendlyName):
-        ds5_dev = d
-        print(f"Found: {d.FriendlyName} (id: {d.id})")
+ds5_idx = None
+for i, dev in enumerate(sd.query_devices()):
+    if ('2- DualSense' in dev['name'] or '2-DualSense' in dev['name']) and dev['max_output_channels'] > 0 and dev['hostapi'] == sd.query_hostapis().index(next(h for h in sd.query_hostapis() if 'WASAPI' in h['name'])):
+        ds5_idx = i
+        print(f"Found: [{i}] {dev['name']} out_ch={dev['max_output_channels']}")
         break
 
-if ds5_dev is None:
-    print("DualSense speaker not found!")
-    print("Available devices:")
-    for d in devices:
-        if d.FriendlyName:
-            print(f"  {d.FriendlyName}")
+if ds5_idx is None:
+    print("DualSense speaker not found! WASAPI devices:")
+    for i, dev in enumerate(sd.query_devices()):
+        if dev['max_output_channels'] > 0:
+            print(f"  [{i}] {dev['name']} out={dev['max_output_channels']}ch")
     sys.exit(1)
 
-# Use WASAPI loopback capture via IAudioClient
-from comtypes import GUID
-import wave
-import struct
+channels = 4
+rate = 48000
+print(f"\nLoopback capture: {channels}ch, {rate}Hz")
+print("CH1=FL  CH2=FR  CH3=RL(haptic)  CH4=RR(haptic)")
+print("Start Genshin now! Press Ctrl+C to stop.\n")
 
-# Get the IMMDevice
-enumerator = comtypes.CoCreateInstance(
-    CLSID_MMDeviceEnumerator,
-    IMMDeviceEnumerator,
-    CLSCTX_ALL
-)
+def callback(indata, frames, time, status):
+    if status:
+        print(f"\r{status}", flush=True)
+    peaks = [np.max(np.abs(indata[:, ch])) for ch in range(min(channels, indata.shape[1]))]
+    if max(peaks) > 0.001:
+        bars = ['#' * int(min(p, 1.0) * 15) for p in peaks]
+        print(f"\rCH1:{peaks[0]:.3f} {bars[0]:15s}|CH2:{peaks[1]:.3f} {bars[1]:15s}|CH3:{peaks[2]:.3f} {bars[2]:15s}|CH4:{peaks[3]:.3f} {bars[3]:15s}", end="", flush=True)
 
-# Enumerate render devices to find ours
-from pycaw.pycaw import IMMDeviceCollection
-collection = enumerator.EnumAudioEndpoints(EDataFlow.eRender.value, 0x00000001)  # DEVICE_STATE_ACTIVE
-count = collection.GetCount()
-
-imm_device = None
-for i in range(count):
-    dev = collection.Item(i)
-    dev_id = dev.GetId()
-    if ds5_dev.id in dev_id or dev_id in ds5_dev.id:
-        imm_device = dev
-        print(f"Matched IMMDevice: {dev_id}")
-        break
-
-if imm_device is None:
-    print("Could not find IMMDevice!")
-    sys.exit(1)
-
-# Get mix format
-from pycaw.pycaw import IAudioClient
-audio_client = imm_device.Activate(IAudioClient._iid_, CLSCTX_ALL, None)
-
-# Get the mix format (what the device actually uses)
-mix_format = audio_client.GetMixFormat()
-fmt = mix_format.contents
-print(f"\nDevice mix format:")
-print(f"  Channels: {fmt.nChannels}")
-print(f"  SampleRate: {fmt.nSamplesPerSec}")
-print(f"  BitsPerSample: {fmt.wBitsPerSample}")
-print(f"  BlockAlign: {fmt.nBlockAlign}")
-print(f"  FormatTag: 0x{fmt.wFormatTag:X}")
-print(f"\nStart Genshin now! Press Ctrl+C to stop.\n")
-
-if fmt.nChannels >= 4:
-    print("  CH1=FL  CH2=FR  CH3=RL(haptic?)  CH4=RR(haptic?)\n")
-else:
-    print(f"  WARNING: Only {fmt.nChannels} channels in mix format!\n")
-
-comtypes.CoUninitialize()
+try:
+    # WASAPI loopback: use the output device as input with wasapi_loopback=True (sounddevice >=0.4.0)
+    with sd.InputStream(device=ds5_idx, channels=channels, samplerate=rate,
+                        dtype='float32', callback=callback,
+                        extra_settings=sd.WasapiSettings(exclusive=False)):
+        print("Listening... (Ctrl+C to stop)")
+        while True:
+            sd.sleep(100)
+except KeyboardInterrupt:
+    print("\nStopped.")
+except Exception as e:
+    print(f"\nError: {e}")
+    print("\nTrying alternative: loopback via pyaudiowpatch...")
+    print("Run: pip install pyaudiowpatch")
