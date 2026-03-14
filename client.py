@@ -51,6 +51,33 @@ def output_receiver(sock, dev, is_bt, haptic_queue=None):
                 haptic_queue.put((data, addr))
                 continue
 
+            # Feature request: [0x03, reportId]
+            if data[0] == 0x03 and len(data) >= 2:
+                report_id = data[1]
+                print(f'  [FEATURE] GET 0x{report_id:02X} from {addr}')
+                try:
+                    response = dev.get_feature_report(report_id, 256)
+                    if response:
+                        pkt = bytes([0x04, report_id]) + bytes(response)
+                        sock.sendto(pkt, addr)
+                        print(f'  [FEATURE] -> {len(response)}B: {bytes(response[:16]).hex(chr(32))}')
+                    else:
+                        print(f'  [FEATURE] -> empty response')
+                except Exception as e:
+                    print(f'  [FEATURE] GET 0x{report_id:02X} error: {e}')
+                continue
+
+            # Set feature: [0x05, reportId, data...]
+            if data[0] == 0x05 and len(data) >= 2:
+                report_id = data[1]
+                payload = data[1:]
+                print(f'  [FEATURE] SET 0x{report_id:02X} ({len(payload)}B)')
+                try:
+                    dev.send_feature_report(payload)
+                except Exception as e:
+                    print(f'  [FEATURE] SET 0x{report_id:02X} error: {e}')
+                continue
+
             if is_bt:
                 # Build BT output report (78 bytes)
                 # USB input: [0]=0x02 [1]=flags0 [2]=flags1 [3..]=data
