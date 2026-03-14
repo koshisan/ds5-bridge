@@ -83,12 +83,14 @@ def callback(in_data, frame_count, time_info, status):
     else:
         left = right = data[:, 0]
 
-    # Simple decimation - no smoothing, raw samples
-    left_ds = left[::downsample_ratio]
-    right_ds = right[::downsample_ratio]
-    for i in range(len(left_ds)):
-        sample_buffer.append(float_to_uint8(left_ds[i]))
-        sample_buffer.append(float_to_uint8(right_ds[i]))
+    # Decimation with anti-aliasing filter
+    from scipy.signal import decimate as sci_decimate
+    if len(left) >= downsample_ratio:
+        left_ds = sci_decimate(left, downsample_ratio, ftype='fir', zero_phase=False)
+        right_ds = sci_decimate(right, downsample_ratio, ftype='fir', zero_phase=False)
+        for i in range(len(left_ds)):
+            sample_buffer.append(float_to_uint8(left_ds[i]))
+            sample_buffer.append(float_to_uint8(right_ds[i]))
 
     # Calculate peak for gate and display
     peak = max(np.max(np.abs(left)), np.max(np.abs(right)))
