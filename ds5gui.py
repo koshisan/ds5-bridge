@@ -180,6 +180,9 @@ class DS5Server:
 
     def _on_client_detected(self):
         """Client packet received — auto-enable things as configured."""
+        # Clear disconnect flag
+        self.set_disconnect(False)
+
         # Release port first
         if self._standby_sock:
             self._standby_sock.close()
@@ -220,13 +223,10 @@ class DS5Server:
                         self.stop_capture()
 
                     if self.config.get('auto_enable_hid', True):
-                        ok, msg = self.disable_driver(DRIVER_HWID)
-                        if ok:
-                            print(f"[DS5] HID driver unloaded after {idle_s:.0f}s idle")
-                            self._handoff_status = 'standby (driver unloaded)'
-                        else:
-                            self._handoff_status = f'idle {idle_s:.0f}s, device busy'
-                            time.sleep(5)  # retry less aggressively
+                        self.set_disconnect(True)
+                        print(f"[DS5] Virtual disconnect after {idle_s:.0f}s idle")
+                        self._handoff_status = 'disconnected (idle)'
+                        time.sleep(5)
                 else:
                     self._handoff_status = f'active, idle {idle_s:.0f}s / {timeout}s'
             time.sleep(1)
