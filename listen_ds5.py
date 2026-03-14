@@ -123,7 +123,7 @@ stream = p.open(
     rate=capture_rate,
     input=True,
     input_device_index=ds5_lb['index'],
-    frames_per_buffer=512,
+    frames_per_buffer=256,
     stream_callback=callback
 )
 
