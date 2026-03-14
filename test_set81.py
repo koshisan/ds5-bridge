@@ -41,6 +41,20 @@ flen = caps.FeatureReportByteLength
 print(f"FeatureReportByteLength: {flen}")
 ctypes.windll.hid.HidD_FreePreparsedData(pp)
 
+# Set proper argtypes for DeviceIoControl
+DeviceIoControl = ctypes.windll.kernel32.DeviceIoControl
+DeviceIoControl.argtypes = [
+    ctypes.c_void_p,   # hDevice
+    ctypes.c_ulong,    # dwIoControlCode
+    ctypes.c_void_p,   # lpInBuffer
+    ctypes.c_ulong,    # nInBufferSize
+    ctypes.c_void_p,   # lpOutBuffer
+    ctypes.c_ulong,    # nOutBufferSize
+    ctypes.POINTER(ctypes.c_ulong),  # lpBytesReturned
+    ctypes.POINTER(OVERLAPPED),      # lpOverlapped
+]
+DeviceIoControl.restype = ctypes.c_bool
+
 IOCTL_SET = 0x000b0197
 IOCTL_GET = 0x000b0193
 
@@ -50,7 +64,7 @@ def do_ioctl(ioctl_code, in_buf, in_size, out_buf, out_size, timeout_ms=5000):
     ov.hEvent = ev
     br = ctypes.c_ulong(0)
     ctypes.windll.kernel32.SetLastError(0)
-    ok = ctypes.windll.kernel32.DeviceIoControl(
+    ok = DeviceIoControl(
         handle, ioctl_code, in_buf, in_size, out_buf, out_size,
         ctypes.byref(br), ctypes.byref(ov))
     err = ctypes.GetLastError()
