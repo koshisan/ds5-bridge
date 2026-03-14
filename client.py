@@ -71,7 +71,7 @@ def output_receiver(sock, dev, is_bt, haptic_queue=None):
             if data[0] == 0x05 and len(data) >= 2:
                 report_id = data[1]
                 payload = data[1:]
-                print(f'  [FEATURE] SET 0x{report_id:02X} ({len(payload)}B)')
+                print(f'  [FEATURE] SET 0x{report_id:02X} ({len(payload)}B): {bytes(payload[:16]).hex(chr(32))}')
                 try:
                     dev.send_feature_report(payload)
                 except Exception as e:
