@@ -1,6 +1,6 @@
 === All DualSense Audio Devices (sounddevice) ===
 
-[1] ヘッドセット マイク (2- DualSense Wirele
+[1] Mikrofonarray (2- DualSense Wir
   hostapi: MME
   max_input_channels: 2
   max_output_channels: 0
@@ -8,7 +8,7 @@
   default_low_input_latency: 0.09
   default_low_output_latency: 0.09
 
-[9] スピーカー (2- DualSense Wireless Co
+[9] Lautsprecher (2- DualSense Wire
   hostapi: MME
   max_input_channels: 0
   max_output_channels: 4
@@ -16,7 +16,7 @@
   default_low_input_latency: 0.09
   default_low_output_latency: 0.09
 
-[12] ヘッドセット マイク (2- DualSense Wireless Controller)
+[17] Mikrofonarray (2- DualSense Wireless Controller)
   hostapi: Windows DirectSound
   max_input_channels: 2
   max_output_channels: 0
@@ -24,7 +24,7 @@
   default_low_input_latency: 0.12
   default_low_output_latency: 0.0
 
-[20] スピーカー (2- DualSense Wireless Controller)
+[25] Lautsprecher (2- DualSense Wireless Controller)
   hostapi: Windows DirectSound
   max_input_channels: 0
   max_output_channels: 4
@@ -32,15 +32,15 @@
   default_low_input_latency: 0.0
   default_low_output_latency: 0.12
 
-[24] スピーカー (2- DualSense Wireless Controller)
+[35] Lautsprecher (2- DualSense Wireless Controller)
   hostapi: Windows WASAPI
   max_input_channels: 0
-  max_output_channels: 4
+  max_output_channels: 2
   default_samplerate: 48000.0
   default_low_input_latency: 0.0
   default_low_output_latency: 0.003
 
-[30] ヘッドセット マイク (2- DualSense Wireless Controller)
+[40] Mikrofonarray (2- DualSense Wireless Controller)
   hostapi: Windows WASAPI
   max_input_channels: 2
   max_output_channels: 0
@@ -48,15 +48,7 @@
   default_low_input_latency: 0.003
   default_low_output_latency: 0.0
 
-[37] スピーカー (DualSense Wireless Controller)
-  hostapi: Windows WDM-KS
-  max_input_channels: 0
-  max_output_channels: 4
-  default_samplerate: 48000.0
-  default_low_input_latency: 0.01
-  default_low_output_latency: 0.01
-
-[38] ヘッドセット マイク (DualSense Wireless Controller)
+[71] Microphone Array (DualSense Wireless Controller Headset)
   hostapi: Windows WDM-KS
   max_input_channels: 2
   max_output_channels: 0
@@ -64,9 +56,17 @@
   default_low_input_latency: 0.01
   default_low_output_latency: 0.01
 
+[72] Speakers (DualSense Wireless Controller)
+  hostapi: Windows WDM-KS
+  max_input_channels: 0
+  max_output_channels: 4
+  default_samplerate: 44100.0
+  default_low_input_latency: 0.01
+  default_low_output_latency: 0.01
+
 === All DualSense Audio Devices (pyaudiowpatch) ===
 
-[1] ヘッドセット マイク (2- DualSense Wirele
+[1] Mikrofonarray (2- DualSense Wir
   defaultHighInputLatency: 0.18
   defaultHighOutputLatency: 0.18
   defaultLowInputLatency: 0.09
@@ -77,10 +77,10 @@
   isLoopbackDevice: False
   maxInputChannels: 2
   maxOutputChannels: 0
-  name: ヘッドセット マイク (2- DualSense Wirele
+  name: Mikrofonarray (2- DualSense Wir
   structVersion: 2
 
-[9] スピーカー (2- DualSense Wireless Co
+[9] Lautsprecher (2- DualSense Wire
   defaultHighInputLatency: 0.18
   defaultHighOutputLatency: 0.18
   defaultLowInputLatency: 0.09
@@ -91,75 +91,75 @@
   isLoopbackDevice: False
   maxInputChannels: 0
   maxOutputChannels: 2
-  name: スピーカー (2- DualSense Wireless Co
+  name: Lautsprecher (2- DualSense Wire
   structVersion: 2
 
-[12] ヘッドセット マイク (2- DualSense Wireless Controller)
+[17] Mikrofonarray (2- DualSense Wireless Controller)
   defaultHighInputLatency: 0.24
   defaultHighOutputLatency: 0.0
   defaultLowInputLatency: 0.12
   defaultLowOutputLatency: 0.0
   defaultSampleRate: 44100.0
   hostApi: 1
-  index: 12
+  index: 17
   isLoopbackDevice: False
   maxInputChannels: 2
   maxOutputChannels: 0
-  name: ヘッドセット マイク (2- DualSense Wireless Controller)
+  name: Mikrofonarray (2- DualSense Wireless Controller)
   structVersion: 2
 
-[20] スピーカー (2- DualSense Wireless Controller)
+[25] Lautsprecher (2- DualSense Wireless Controller)
   defaultHighInputLatency: 0.0
   defaultHighOutputLatency: 0.24
   defaultLowInputLatency: 0.0
   defaultLowOutputLatency: 0.12
   defaultSampleRate: 44100.0
   hostApi: 1
-  index: 20
+  index: 25
   isLoopbackDevice: False
   maxInputChannels: 0
-  maxOutputChannels: 4
-  name: スピーカー (2- DualSense Wireless Controller)
+  maxOutputChannels: 2
+  name: Lautsprecher (2- DualSense Wireless Controller)
   structVersion: 2
 
-[24] スピーカー (2- DualSense Wireless Controller)
+[35] Lautsprecher (2- DualSense Wireless Controller)
   defaultHighInputLatency: 0.0
   defaultHighOutputLatency: 0.01
   defaultLowInputLatency: 0.0
   defaultLowOutputLatency: 0.003
   defaultSampleRate: 48000.0
   hostApi: 2
-  index: 24
+  index: 35
   isLoopbackDevice: False
   maxInputChannels: 0
-  maxOutputChannels: 4
-  name: スピーカー (2- DualSense Wireless Controller)
+  maxOutputChannels: 2
+  name: Lautsprecher (2- DualSense Wireless Controller)
   structVersion: 2
 
-[30] ヘッドセット マイク (2- DualSense Wireless Controller)
+[40] Mikrofonarray (2- DualSense Wireless Controller)
   defaultHighInputLatency: 0.01
   defaultHighOutputLatency: 0.0
   defaultLowInputLatency: 0.003
   defaultLowOutputLatency: 0.0
   defaultSampleRate: 48000.0
   hostApi: 2
-  index: 30
+  index: 40
   isLoopbackDevice: False
   maxInputChannels: 2
   maxOutputChannels: 0
-  name: ヘッドセット マイク (2- DualSense Wireless Controller)
+  name: Mikrofonarray (2- DualSense Wireless Controller)
   structVersion: 2
 
-[33] スピーカー (2- DualSense Wireless Controller) [Loopback]
+[49] Lautsprecher (2- DualSense Wireless Controller) [Loopback]
   defaultHighInputLatency: 0.01
   defaultHighOutputLatency: 0.0
   defaultLowInputLatency: 0.003
   defaultLowOutputLatency: 0.0
   defaultSampleRate: 48000.0
   hostApi: 2
-  index: 33
+  index: 49
   isLoopbackDevice: True
-  maxInputChannels: 4
+  maxInputChannels: 2
   maxOutputChannels: 0
-  name: スピーカー (2- DualSense Wireless Controller) [Loopback]
+  name: Lautsprecher (2- DualSense Wireless Controller) [Loopback]
   structVersion: 2
