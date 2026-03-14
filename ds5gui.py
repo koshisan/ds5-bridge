@@ -403,8 +403,8 @@ class DS5GUI:
         self.server._start_listener()
         self.server._start_idle_monitor()
 
-        # Auto-start capture if configured
-        if self.server.config.get('auto_capture', True):
+        # Auto-start capture only if HID driver is active
+        if self.server.config.get('auto_capture', True) and self.server.is_driver_enabled(DRIVER_HWID):
             self.server.start_capture()
 
     def _build_ui(self):
