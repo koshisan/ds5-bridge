@@ -3,6 +3,7 @@ Based on SAxense research: https://apps.sdore.me/SAxense
 """
 import pyaudiowpatch as pyaudio
 import numpy as np
+from scipy.signal import decimate
 import socket
 import time
 import sys
@@ -82,15 +83,13 @@ def callback(in_data, frame_count, time_info, status):
     else:
         left = right = data[:, 0]
 
-    # Downsample by block averaging (not decimation - preserves energy)
-    n_blocks = len(left) // downsample_ratio
-    for i in range(n_blocks):
-        start = i * downsample_ratio
-        end = start + downsample_ratio
-        l_avg = np.mean(np.abs(left[start:end])) * np.sign(np.mean(left[start:end])) if np.any(left[start:end]) else 0.0
-        r_avg = np.mean(np.abs(right[start:end])) * np.sign(np.mean(right[start:end])) if np.any(right[start:end]) else 0.0
-        sample_buffer.append(float_to_uint8(l_avg))
-        sample_buffer.append(float_to_uint8(r_avg))
+    # Downsample with anti-aliasing filter (preserves waveform shape)
+    if len(left) >= downsample_ratio:
+        left_ds = decimate(left, downsample_ratio, ftype='fir', zero_phase=False)
+        right_ds = decimate(right, downsample_ratio, ftype='fir', zero_phase=False)
+        for i in range(len(left_ds)):
+            sample_buffer.append(float_to_uint8(left_ds[i]))
+            sample_buffer.append(float_to_uint8(right_ds[i]))
 
     # Calculate peak for gate and display
     peak = max(np.max(np.abs(left)), np.max(np.abs(right)))
