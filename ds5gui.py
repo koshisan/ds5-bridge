@@ -368,12 +368,13 @@ class DS5Server:
             now = time.time()
             if peak > self.config['threshold']:
                 self.send_until = now + 1.0
+            # Always update target from shared memory
+            nonlocal target
+            shared = self.read_shared_status()
+            if shared and shared['client_port'] > 0:
+                target = (shared['client_ip'], shared['client_port'])
+
             if now < self.send_until:
-                # Get client address from shared memory
-                nonlocal target
-                shared = self.read_shared_status()
-                if shared and shared['client_port'] > 0:
-                    target = (shared['client_ip'], shared['client_port'])
                 if target:
                     while len(sample_buffer) >= 64:
                         send_packet()
