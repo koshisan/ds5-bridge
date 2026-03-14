@@ -1,55 +1,53 @@
+import sys
 import comtypes
 from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities
-import struct
+import ctypes
+
+out = open('ds5_audio_formats.txt', 'w', encoding='utf-8') if '--save' not in sys.argv else open('ds5_audio_formats.txt', 'w', encoding='utf-8')
+
+def log(s=''):
+    print(s)
+    out.write(s + '\n')
 
 devices = AudioUtilities.GetAllDevices()
 for d in devices:
     if 'DualSense' in (d.FriendlyName or '') or '2-' in (d.FriendlyName or ''):
-        print(f"\n=== {d.FriendlyName} ===")
-        print(f"  ID: {d.id}")
-        print(f"  State: {d.state}")
-        
-        try:
-            props = d._dev.OpenPropertyStore(0)  # STGM_READ
-            count = props.GetCount()
-            for i in range(count):
-                try:
-                    pk = props.GetAt(i)
-                    val = props.GetValue(pk)
-                    # Format key
-                    fmtid = str(pk.fmtid)
-                    pid = pk.pid
-                    # Check for audio format properties
-                    if 'f19f064d' in fmtid.lower() or 'e4870e26' in fmtid.lower():
-                        print(f"  Property {fmtid}#{pid} = {val}")
-                except:
-                    pass
-        except Exception as e:
-            print(f"  Error: {e}")
+        log(f"\n=== {d.FriendlyName} ===")
+        log(f"  ID: {d.id}")
+        log(f"  State: {d.state}")
 
-# Also try via IAudioClient
-print("\n=== Mix Format (IAudioClient) ===")
-import comtypes
-from ctypes import POINTER, cast, byref, c_void_p
+# Mix Format via IAudioClient
+from pycaw.pycaw import WAVEFORMATEX
+log("\n=== Mix Formats (IAudioClient.GetMixFormat) ===")
 for d in devices:
-    if 'DualSense' in (d.FriendlyName or '') and d.state == 1:
+    if ('DualSense' in (d.FriendlyName or '') or '2-' in (d.FriendlyName or '')) and d.state == 1:
         try:
             client = d._dev.Activate(
                 comtypes.GUID('{1CB9AD4C-DBFA-4c32-B178-C2F568A703B2}'),
                 CLSCTX_ALL, None)
-            from pycaw.pycaw import WAVEFORMATEX
-            # GetMixFormat
-            import ctypes
             fmt_ptr = ctypes.POINTER(WAVEFORMATEX)()
             client.GetMixFormat(ctypes.byref(fmt_ptr))
             fmt = fmt_ptr.contents
-            print(f"  {d.FriendlyName}:")
-            print(f"    wFormatTag: {fmt.wFormatTag}")
-            print(f"    nChannels: {fmt.nChannels}")
-            print(f"    nSamplesPerSec: {fmt.nSamplesPerSec}")
-            print(f"    nAvgBytesPerSec: {fmt.nAvgBytesPerSec}")
-            print(f"    nBlockAlign: {fmt.nBlockAlign}")
-            print(f"    wBitsPerSample: {fmt.wBitsPerSample}")
+            log(f"  {d.FriendlyName}:")
+            log(f"    wFormatTag: {fmt.wFormatTag} ({'PCM' if fmt.wFormatTag==1 else 'EXTENSIBLE' if fmt.wFormatTag==0xFFFE else 'other'})")
+            log(f"    nChannels: {fmt.nChannels}")
+            log(f"    nSamplesPerSec: {fmt.nSamplesPerSec}")
+            log(f"    nAvgBytesPerSec: {fmt.nAvgBytesPerSec}")
+            log(f"    nBlockAlign: {fmt.nBlockAlign}")
+            log(f"    wBitsPerSample: {fmt.wBitsPerSample}")
+            log(f"    cbSize: {fmt.cbSize}")
+            if fmt.cbSize >= 22 and fmt.wFormatTag == 0xFFFE:
+                # Read WAVEFORMATEXTENSIBLE extra data
+                raw = ctypes.string_at(ctypes.addressof(fmt), ctypes.sizeof(WAVEFORMATEX) + fmt.cbSize)
+                valid_bits = int.from_bytes(raw[18:20], 'little')
+                channel_mask = int.from_bytes(raw[20:24], 'little')
+                sub_format = raw[24:40]
+                log(f"    wValidBitsPerSample: {valid_bits}")
+                log(f"    dwChannelMask: 0x{channel_mask:08X}")
+                log(f"    SubFormat GUID: {sub_format.hex()}")
         except Exception as e:
-            print(f"  {d.FriendlyName}: {e}")
+            log(f"  {d.FriendlyName}: ERROR {e}")
+
+out.close()
+print(f"\nSaved to ds5_audio_formats.txt")
