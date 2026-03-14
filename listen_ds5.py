@@ -82,14 +82,15 @@ def callback(in_data, frame_count, time_info, status):
     else:
         left = right = data[:, 0]
 
-    # Downsample by simple decimation (take every Nth sample)
-    left_ds = left[::downsample_ratio]
-    right_ds = right[::downsample_ratio]
-
-    # Convert to uint8 and interleave (L, R, L, R, ...)
-    for i in range(len(left_ds)):
-        sample_buffer.append(float_to_uint8(left_ds[i]))
-        sample_buffer.append(float_to_uint8(right_ds[i]))
+    # Downsample by block averaging (not decimation - preserves energy)
+    n_blocks = len(left) // downsample_ratio
+    for i in range(n_blocks):
+        start = i * downsample_ratio
+        end = start + downsample_ratio
+        l_avg = np.mean(np.abs(left[start:end])) * np.sign(np.mean(left[start:end])) if np.any(left[start:end]) else 0.0
+        r_avg = np.mean(np.abs(right[start:end])) * np.sign(np.mean(right[start:end])) if np.any(right[start:end]) else 0.0
+        sample_buffer.append(float_to_uint8(l_avg))
+        sample_buffer.append(float_to_uint8(r_avg))
 
     # Calculate peak for gate and display
     peak = max(np.max(np.abs(left)), np.max(np.abs(right)))
