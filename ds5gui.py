@@ -393,7 +393,7 @@ class DS5GUI:
         self.server = DS5Server()
         self.root = tk.Tk()
         self.root.title("DS5 Bridge Server")
-        self.root.geometry("580x520")
+        self.root.geometry("580x560")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._build_ui()
