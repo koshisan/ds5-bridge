@@ -74,6 +74,7 @@ def output_receiver(sock, dev, is_bt, haptic_queue=None):
                         pkt = bytes([0x04, report_id]) + resp_bytes
                         sock.sendto(pkt, addr)
                     else:
+                        pass
                 except Exception as e:
                     print(f'  [FEATURE] GET 0x{report_id:02X} error: {e}')
                 continue
