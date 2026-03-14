@@ -183,6 +183,7 @@ class DS5Server:
         target = (self.config['client_ip'], self.config['haptic_port'])
         target_samples = 3000
 
+        self._capture_info = f"Loopback: {channels}ch S16 {rate}Hz | Haptic: ch{'3+4' if channels >= 4 else '1+2'} | Resample: {rate}->{target_samples}Hz | Conv: S16->U8 | UDP -> {target[0]}:{target[1]}"
         print(f"[DS5] Capture: {channels}ch {rate}Hz S16 -> {target}")
 
         def send_packet():
@@ -369,6 +370,9 @@ class DS5GUI:
                      width=6, state='readonly').grid(row=0, column=2)
         self.threshold_var.trace_add('write', lambda *a: self._update_threshold())
 
+        self.lbl_capture_info = ttk.Label(cap_frame, text="", foreground='gray')
+        self.lbl_capture_info.grid(row=1, column=0, sticky='w', columnspan=4, pady=(5,0))
+
         # --- Bottom ---
         bot_frame = ttk.Frame(self.root, padding=10)
         bot_frame.pack(fill='x', padx=10)
@@ -390,6 +394,10 @@ class DS5GUI:
 
         self.lbl_packets.config(text=f"Packets: {self.server.packets_sent}")
         self.lbl_peak.config(text=f"Peak: {self.server.last_peak:.3f}")
+
+        # Capture format info
+        if hasattr(self.server, '_capture_info'):
+            self.lbl_capture_info.config(text=self.server._capture_info)
 
         # Shared memory
         try:
@@ -448,9 +456,15 @@ class DS5GUI:
                 if 'DriverVersion' in p.get('KeyName', ''):
                     version = p.get('Data', '?')
                 if 'DriverDate' in p.get('KeyName', ''):
-                    d = p.get('Data', '')
-                    if d:
-                        date = d[:10] if len(d) >= 10 else d
+                    d = str(p.get('Data', ''))
+                    if '/Date(' in d:
+                        import re
+                        m = re.search(r'/Date\((\d+)', d)
+                        if m:
+                            from datetime import datetime
+                            date = datetime.fromtimestamp(int(m.group(1)) / 1000).strftime('%Y-%m-%d')
+                    elif d:
+                        date = d[:10]
             return status, name, version, date
         except Exception:
             return '?', '?', '?', '?'
