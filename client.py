@@ -131,8 +131,7 @@ def haptic_receiver(haptic_sock, dev, is_bt):
             seq = (seq + 1) & 0x0F
             haptic_count += 1
 
-            if haptic_count % 100 == 0:
-                print(f"\r  [HAPTIC] {haptic_count} packets sent    ", end="", flush=True)
+            print(f"  [HAPTIC] #{haptic_count} seq={audio_seq} {len(audio_samples)}B", flush=True)
 
         except Exception as e:
             print(f"\n  [HAPTIC] Error: {e}")
