@@ -98,6 +98,7 @@ def haptic_receiver(haptic_sock, dev, is_bt):
     while True:
         try:
             data, addr = haptic_sock.recvfrom(256)
+            print(f"  [HAPTIC] recv {len(data)}B from {addr} first=0x{data[0]:02X}", flush=True)
             if len(data) < 2 or data[0] != 0x32:
                 continue
 
