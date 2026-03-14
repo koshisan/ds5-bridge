@@ -154,7 +154,7 @@ if ok:
     print(f"\nReopened with OVERLAPPED: handle={handle}")
 
     # Use DeviceIoControl with IOCTL_HID_SET_FEATURE (like Chromium!)
-    IOCTL_HID_SET_FEATURE = 0x000B0110
+    IOCTL_HID_SET_FEATURE = 0x000b0197
     buf = (ctypes.c_ubyte * flen)()
     buf[0] = 0x80
     buf[1] = 0x09
@@ -189,7 +189,7 @@ if ok:
         print(f"GetOverlappedResult: ok={ok2} err={err2} bytes={bytesReturned.value}")
 
     # Now poll 0x81 using DeviceIoControl GET_FEATURE
-    IOCTL_HID_GET_FEATURE = 0x000B0120
+    IOCTL_HID_GET_FEATURE = 0x000b0193
     for i in range(30):
         time.sleep(0.01)
         rbuf = (ctypes.c_ubyte * flen)()
