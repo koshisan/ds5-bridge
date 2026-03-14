@@ -123,6 +123,34 @@ class DS5Server:
             return None
 
 
+    def set_disconnect(self, disconnected):
+        """Set disconnect flag in shared memory."""
+        try:
+            kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+            kernel32.OpenFileMappingW.restype = ctypes.c_void_p
+            kernel32.OpenFileMappingW.argtypes = [ctypes.c_uint32, ctypes.c_bool, ctypes.c_wchar_p]
+            kernel32.MapViewOfFile.restype = ctypes.c_void_p
+            kernel32.MapViewOfFile.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_size_t]
+            kernel32.UnmapViewOfFile.argtypes = [ctypes.c_void_p]
+            kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+
+            handle = kernel32.OpenFileMappingW(0x000F001F, False, DS5_SHARED_MEMORY_NAME)
+            if not handle:
+                return False
+            ptr = kernel32.MapViewOfFile(handle, 0x001F, 0, 0, ctypes.sizeof(DS5SharedStatus))
+            if not ptr:
+                kernel32.CloseHandle(handle)
+                return False
+            status = DS5SharedStatus.from_address(ptr)
+            status.disconnect = 1 if disconnected else 0
+            kernel32.UnmapViewOfFile(ptr)
+            kernel32.CloseHandle(handle)
+            print(f"[DS5] Disconnect flag set to {disconnected}")
+            return True
+        except Exception as e:
+            print(f"[DS5] set_disconnect error: {e}")
+            return False
+
     # --- Port Listener ---
     def _start_listener(self):
         """Background thread: grab UDP port when driver is off, release when driver is on."""
