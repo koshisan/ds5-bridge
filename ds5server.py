@@ -83,7 +83,7 @@ class DS5Server:
     def _run_elevated(self, cmd):
         """Run a command with admin privileges."""
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, errors='replace', shell=True)
             return result.returncode == 0, result.stdout + result.stderr
         except Exception as e:
             return False, str(e)
@@ -93,7 +93,7 @@ class DS5Server:
             result = subprocess.run(
                 ['powershell', '-Command',
                  f'Get-PnpDevice | Where-Object {{ $_.HardwareID -contains "{hwid}" }} | Select-Object -ExpandProperty Status'],
-                capture_output=True, text=True, timeout=5)
+                capture_output=True, text=True, errors='replace', timeout=5)
             status = result.stdout.strip()
             return status == 'OK'
         except:
@@ -104,7 +104,7 @@ class DS5Server:
             result = subprocess.run(
                 ['powershell', '-Command',
                  f'Get-PnpDevice | Where-Object {{ $_.HardwareID -contains "{hwid}" }} | Select-Object -ExpandProperty InstanceId'],
-                capture_output=True, text=True, timeout=5)
+                capture_output=True, text=True, errors='replace', timeout=5)
             return result.stdout.strip()
         except:
             return None
@@ -128,7 +128,7 @@ class DS5Server:
             result = subprocess.run(
                 ['powershell', '-Command',
                  'Get-AudioDevice -List | Where-Object { $_.Name -like "*DualSense*" -and $_.Type -eq "Playback" } | Select-Object -ExpandProperty Name'],
-                capture_output=True, text=True, timeout=5)
+                capture_output=True, text=True, errors='replace', timeout=5)
             name = result.stdout.strip()
             if name:
                 return name
