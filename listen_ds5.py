@@ -14,7 +14,7 @@ DS5_SAMPLES_PER_PACKET = 32  # 32 stereo samples per Report 0x32
 PACKET_INTERVAL = DS5_SAMPLES_PER_PACKET / DS5_HAPTIC_RATE  # ~10.67ms
 UDP_HOST = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 UDP_PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 5556  # Separate port for haptic data
-GAIN = 100.0  # Amplification factor
+GAIN = 30.0  # Amplification factor
 
 p = pyaudio.PyAudio()
 
