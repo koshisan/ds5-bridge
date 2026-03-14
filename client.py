@@ -49,6 +49,9 @@ def output_receiver(sock, dev, is_bt, haptic_queue=None):
             data, addr = sock.recvfrom(256)
             if len(data) < 2:
                 continue
+            # Debug: log all non-input packets from server
+            if len(data) != 64 and data[0] not in (0x01,):
+                print(f'  [RECV] {len(data)}B first=0x{data[0]:02X} from {addr}')
 
             # Route 0x32 haptic packets to haptic handler
             if data[0] == 0x32 and haptic_queue is not None:
