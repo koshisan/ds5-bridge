@@ -151,8 +151,8 @@ except Exception as e:
 channels = fmt.Format.nChannels
 
 # Get capture client
-capture_ptr = audio_client.GetService(byref(IID_IAudioCaptureClient))
-capture_client = ctypes.cast(capture_ptr, POINTER(IAudioCaptureClient)).contents
+capture_void = audio_client.GetService(byref(IID_IAudioCaptureClient))
+capture_client = ctypes.cast(capture_void, POINTER(IAudioCaptureClient))
 
 print(f"\nLoopback active: {channels}ch, 48000Hz")
 if channels >= 4:
