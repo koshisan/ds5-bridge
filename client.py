@@ -144,7 +144,7 @@ def haptic_receiver(haptic_sock, dev, is_bt):
             seq = (seq + 1) & 0x0F
             haptic_count += 1
 
-            print(f"  [HAPTIC] #{haptic_count} wrote 0x32 report", flush=True)
+            print(f"  [HAPTIC] #{haptic_count} {report[:20].hex(' ')}", flush=True)
 
         except Exception as e:
             print(f"\n  [HAPTIC] Error: {e}")
