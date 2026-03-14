@@ -24,7 +24,7 @@ def callback(indata, frames, time_info, status):
         print(f"\rAudio! Peak: {peak:.4f} {'#' * bars}    ", end="", flush=True)
 
 try:
-    with sd.InputStream(device=dev_idx, channels=2, samplerate=48000, callback=callback, dtype='float32'):
+    with sd.InputStream(device=dev_idx, channels=4, samplerate=48000, callback=callback, dtype='float32'):
         while True:
             time.sleep(0.1)
 except KeyboardInterrupt:
