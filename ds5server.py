@@ -72,6 +72,23 @@ class DS5Server:
         self._audio_enabled = False
         self._status_lock = threading.Lock()
         self._refresh_status()
+        self._shared_info = 'no driver data'
+        self._start_shared_poller()
+
+    def _start_shared_poller(self):
+        def poll():
+            while True:
+                try:
+                    s = self.read_shared_status()
+                    if s and s['driver_active']:
+                        self._shared_info = f'{s["client_ip"]}:{s["client_port"]} in:{s["packets_in"]}'
+                    else:
+                        self._shared_info = 'driver inactive'
+                except Exception:
+                    self._shared_info = 'no driver data'
+                time.sleep(2)
+        t = threading.Thread(target=poll, daemon=True)
+        t.start()
 
     def _refresh_status(self):
         """Refresh driver status in background."""
@@ -345,7 +362,7 @@ class DS5Server:
     def _build_menu(self):
         return pystray.Menu(
             pystray.MenuItem(
-                lambda text: f'Client: {self.config["client_ip"]} | Shared: {self.read_shared_status() is not None}', None, enabled=False),
+                lambda text: f'Client: {self.config["client_ip"]} | {self._shared_info}', None, enabled=False),
             pystray.MenuItem(
                 lambda text: f'Packets: {self.packets_sent} | Peak: {self.last_peak:.4f}', None, enabled=False),
             pystray.Menu.SEPARATOR,
@@ -407,6 +424,23 @@ class DS5Server:
             ok, msg = self.disable_driver(hwid)
         print(f"[DS5Server] {'Enable' if enable else 'Disable'} {hwid}: {ok} - {msg.strip()}")
         self._refresh_status()
+        self._shared_info = 'no driver data'
+        self._start_shared_poller()
+
+    def _start_shared_poller(self):
+        def poll():
+            while True:
+                try:
+                    s = self.read_shared_status()
+                    if s and s['driver_active']:
+                        self._shared_info = f'{s["client_ip"]}:{s["client_port"]} in:{s["packets_in"]}'
+                    else:
+                        self._shared_info = 'driver inactive'
+                except Exception:
+                    self._shared_info = 'no driver data'
+                time.sleep(2)
+        t = threading.Thread(target=poll, daemon=True)
+        t.start()
 
     def _set_gain(self, val):
         self.config['gain'] = float(val)
