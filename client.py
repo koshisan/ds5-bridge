@@ -79,6 +79,66 @@ def output_receiver(sock, dev, is_bt):
             break
 
 
+
+def haptic_receiver(haptic_sock, dev, is_bt):
+    """Receive haptic audio packets and send as BT Report 0x32."""
+    haptic_count = 0
+    seq = 0
+
+    if not is_bt:
+        print("  [HAPTIC] Skipping - USB connection, haptics only work over BT")
+        return
+
+    print(f"  [HAPTIC] Listening on port {haptic_sock.getsockname()[1]}")
+
+    while True:
+        try:
+            data, addr = haptic_sock.recvfrom(256)
+            if len(data) < 2 or data[0] != 0x32:
+                continue
+
+            audio_seq = data[1]
+            audio_samples = data[2:66]  # 64 bytes of audio (32 stereo samples)
+
+            if len(audio_samples) < 64:
+                audio_samples = audio_samples + bytes(64 - len(audio_samples))
+
+            # Build BT Report 0x32 (141 bytes)
+            # [0]=0x32 [1]=tag(4)|seq(4) [2-10]=Packet 0x11 (control, 9B)
+            # [11-76]=Packet 0x12 (audio, 2+64B) [77-136]=padding [137-140]=CRC32
+            bt_out = bytearray(141)
+            bt_out[0] = 0x32
+
+            # Tag nibble (0x4) | Sequence nibble
+            bt_out[1] = 0x40 | (seq & 0x0F)
+
+            # Packet 0x11: Control packet (9 bytes, all zero = no changes)
+            bt_out[2] = 0x11
+            # bytes 3-10 = zeros (no control changes)
+
+            # Packet 0x12: Audio packet
+            bt_out[11] = 0x12
+            bt_out[12] = 0x00  # Sub-type / flags
+
+            # Audio samples (64 bytes = 32 stereo samples, 8-bit unsigned)
+            bt_out[13:13+64] = audio_samples
+
+            # CRC32 over bytes 0..136, seed 0xA2
+            crc = ds5_bt_crc32(bytes(bt_out[:137]))
+            struct.pack_into('<I', bt_out, 137, crc)
+
+            dev.write(bytes(bt_out))
+            seq = (seq + 1) & 0x0F
+            haptic_count += 1
+
+            if haptic_count % 100 == 0:
+                print(f"\r  [HAPTIC] {haptic_count} packets sent    ", end="", flush=True)
+
+        except Exception as e:
+            print(f"\n  [HAPTIC] Error: {e}")
+            break
+
+
 def main():
     parser = argparse.ArgumentParser(description="DS5 Bridge Client (UDP)")
     parser.add_argument("host", help="Host IP address")
@@ -120,6 +180,15 @@ def main():
     out_thread = threading.Thread(target=output_receiver, args=(sock, dev, is_bt),
                                   daemon=True)
     out_thread.start()
+
+    # Haptic audio receiver (port 5556)
+    haptic_port = args.port + 1  # 5556 by default
+    haptic_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    haptic_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    haptic_sock.bind(("0.0.0.0", haptic_port))
+    haptic_thread = threading.Thread(target=haptic_receiver, args=(haptic_sock, dev, is_bt),
+                                     daemon=True)
+    haptic_thread.start()
 
     count = 0
     start = time.monotonic()
