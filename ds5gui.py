@@ -416,7 +416,7 @@ class DS5GUI:
         if self.server.capturing:
             self.server.stop_capture()
         else:
-        self.server.start_capture()
+            self.server.start_capture()
 
     def _update_threshold(self):
         try:
