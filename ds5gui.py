@@ -183,7 +183,7 @@ class DS5Server:
         target = (self.config['client_ip'], self.config['haptic_port'])
         target_samples = 3000
 
-        self._capture_info = f"Loopback: {channels}ch S16 {rate}Hz | Haptic: ch{'3+4' if channels >= 4 else '1+2'} | Resample: {rate}->{target_samples}Hz | Conv: S16->U8 | UDP -> {target[0]}:{target[1]}"
+        self._capture_info = f"Loopback: {channels}ch S16 {rate}Hz | Haptic: ch{'3+4' if channels >= 4 else '1+2'} | Resample: {rate}->{target_samples}Hz\nConv: S16->U8 | UDP -> {target[0]}:{target[1]}"
         print(f"[DS5] Capture: {channels}ch {rate}Hz S16 -> {target}")
 
         def send_packet():
@@ -287,7 +287,7 @@ class DS5GUI:
         self.server = DS5Server()
         self.root = tk.Tk()
         self.root.title("DS5 Bridge Server")
-        self.root.geometry("520x480")
+        self.root.geometry("580x520")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._build_ui()
