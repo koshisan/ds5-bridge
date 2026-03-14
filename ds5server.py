@@ -79,8 +79,13 @@ class DS5Server:
             return False, str(e)
 
     def is_driver_enabled(self, hwid):
-        ok, out = self._run_elevated(f'pnputil /enum-devices /ids /enabled')
-        return hwid.lower() in out.lower()
+        try:
+            result = subprocess.run(
+                ['powershell', '-Command', f'(Get-PnpDevice | Where-Object {{ $_.HardwareID -contains "{hwid}" }}).Status'],
+                capture_output=True, text=True, timeout=5)
+            return 'OK' in result.stdout
+        except:
+            return False
 
     def enable_driver(self, hwid):
         # Get instance ID first
@@ -275,18 +280,25 @@ class DS5Server:
                                pystray.MenuItem('Disable', lambda: self._set_driver(AUDIO_HWID, False)),
                            )),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem(f'Gain: {self.config["gain"]:.0f}',
+            pystray.MenuItem('Gain',
                            pystray.Menu(
-                               pystray.MenuItem('100', lambda: self._set_gain(100)),
-                               pystray.MenuItem('200', lambda: self._set_gain(200)),
-                               pystray.MenuItem('500', lambda: self._set_gain(500)),
-                               pystray.MenuItem('1000', lambda: self._set_gain(1000)),
+                               pystray.MenuItem('100', lambda: self._set_gain(100),
+                                   checked=lambda item: self.config['gain'] == 100),
+                               pystray.MenuItem('200', lambda: self._set_gain(200),
+                                   checked=lambda item: self.config['gain'] == 200),
+                               pystray.MenuItem('500', lambda: self._set_gain(500),
+                                   checked=lambda item: self.config['gain'] == 500),
+                               pystray.MenuItem('1000', lambda: self._set_gain(1000),
+                                   checked=lambda item: self.config['gain'] == 1000),
                            )),
-            pystray.MenuItem(f'Threshold: {self.config["threshold"]}',
+            pystray.MenuItem('Threshold',
                            pystray.Menu(
-                               pystray.MenuItem('0.005', lambda: self._set_threshold(0.005)),
-                               pystray.MenuItem('0.009', lambda: self._set_threshold(0.009)),
-                               pystray.MenuItem('0.015', lambda: self._set_threshold(0.015)),
+                               pystray.MenuItem('0.005', lambda: self._set_threshold(0.005),
+                                   checked=lambda item: self.config['threshold'] == 0.005),
+                               pystray.MenuItem('0.009', lambda: self._set_threshold(0.009),
+                                   checked=lambda item: self.config['threshold'] == 0.009),
+                               pystray.MenuItem('0.015', lambda: self._set_threshold(0.015),
+                                   checked=lambda item: self.config['threshold'] == 0.015),
                            )),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem('Autostart', self._toggle_autostart,
