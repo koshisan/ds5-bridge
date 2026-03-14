@@ -83,55 +83,6 @@ class DS5Server:
                 self._audio_enabled = audio
         threading.Thread(target=_do, daemon=True).start()
 
-
-    # --- Shared Memory (driver status, optional) ---
-    def read_shared_status(self):
-        """Read driver status from shared memory. Returns None if unavailable."""
-        try:
-            import ctypes
-            handle = ctypes.windll.kernel32.OpenFileMappingW(
-                0x0004, False, "Global\\DS5VirtualStatus")
-            if not handle:
-                return None
-
-            class DS5Status(ctypes.Structure):
-                _pack_ = 1
-                _fields_ = [
-                    ('version', ctypes.c_uint32),
-                    ('size', ctypes.c_uint32),
-                    ('udp_port', ctypes.c_uint16),
-                    ('client_ip', ctypes.c_uint8 * 4),
-                    ('client_port', ctypes.c_uint16),
-                    ('last_seen', ctypes.c_int64),
-                    ('packets_in', ctypes.c_uint32),
-                    ('packets_out', ctypes.c_uint32),
-                    ('driver_active', ctypes.c_uint8),
-                    ('reserved', ctypes.c_uint8 * 32),
-                ]
-
-            ptr = ctypes.windll.kernel32.MapViewOfFile(
-                handle, 0x0004, 0, 0, ctypes.sizeof(DS5Status))
-            if not ptr:
-                ctypes.windll.kernel32.CloseHandle(handle)
-                return None
-
-            status = DS5Status.from_address(ptr)
-            result = {
-                'version': status.version,
-                'udp_port': status.udp_port,
-                'client_ip': f'{status.client_ip[0]}.{status.client_ip[1]}.{status.client_ip[2]}.{status.client_ip[3]}',
-                'client_port': status.client_port,
-                'last_seen': status.last_seen,
-                'packets_in': status.packets_in,
-                'packets_out': status.packets_out,
-                'driver_active': bool(status.driver_active),
-            }
-            ctypes.windll.kernel32.UnmapViewOfFile(ptr)
-            ctypes.windll.kernel32.CloseHandle(handle)
-            return result
-        except Exception:
-            return None
-
     # --- Driver Management ---
     def _run_elevated(self, cmd):
         """Run a command with admin privileges."""
@@ -316,12 +267,6 @@ class DS5Server:
             print(f"[DS5Server] Autostart error: {e}")
 
     # --- Tray Icon ---
-    def _get_status_text(self):
-        shared = self.read_shared_status()
-        if shared and shared['driver_active']:
-            return f'Driver: ON | Client: {shared["client_ip"]}:{shared["client_port"]} | In:{shared["packets_in"]} Out:{shared["packets_out"]}'
-        return f'Driver: {"ON" if getattr(self, "_hid_enabled", False) else "OFF"} | Capture: {"ON" if self.running else "OFF"}'
-
     def _create_icon(self, color='green'):
         img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
@@ -336,7 +281,7 @@ class DS5Server:
     def _build_menu(self):
         return pystray.Menu(
             pystray.MenuItem(
-                lambda text: self._get_status_text(), None, enabled=False),
+                lambda text: f'Client: {self.config["client_ip"]}', None, enabled=False),
             pystray.MenuItem(
                 lambda text: f'Packets: {self.packets_sent} | Peak: {self.last_peak:.4f}', None, enabled=False),
             pystray.Menu.SEPARATOR,
