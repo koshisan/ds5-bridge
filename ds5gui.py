@@ -35,7 +35,6 @@ DS5_SHARED_MEMORY_NAME = "Global\\DS5VirtualStatus"
 
 DEFAULT_CONFIG = {
     'client_ip': '192.168.81.94',
-    'haptic_port': 5556,
     'gain': 500.0,
     'threshold': 0.009,
     'autostart': False,
@@ -325,10 +324,10 @@ class DS5Server:
         rate = int(ds5_lb['defaultSampleRate'])
         sample_buffer = bytearray()
         seq = 0
-        target = (self.config['client_ip'], self.config['haptic_port'])
+        target = None
         target_samples = 3000
 
-        self._capture_info = f"Loopback: {channels}ch S16 {rate}Hz | Haptic: ch{'3+4' if channels >= 4 else '1+2'} | Resample: {rate}->{target_samples}Hz\nConv: S16->U8 | UDP -> {target[0]}:{target[1]}"
+        self._capture_info = f"Loopback: {channels}ch S16 {rate}Hz | Haptic: ch{'3+4' if channels >= 4 else '1+2'} | Resample: {rate}->{target_samples}Hz\nConv: S16->U8 | UDP -> client (from shared memory)"
         print(f"[DS5] Capture: {channels}ch {rate}Hz S16 -> {target}")
 
         def send_packet():
@@ -370,8 +369,15 @@ class DS5Server:
             if peak > self.config['threshold']:
                 self.send_until = now + 1.0
             if now < self.send_until:
-                while len(sample_buffer) >= 64:
-                    send_packet()
+                # Get client address from shared memory
+                shared = self.read_shared_status()
+                if shared and shared['client_port'] > 0:
+                    target = (shared['client_ip'], shared['client_port'])
+                if target:
+                    while len(sample_buffer) >= 64:
+                        send_packet()
+                else:
+                    sample_buffer.clear()
             else:
                 sample_buffer.clear()
             return (None, pyaudio.paContinue)
