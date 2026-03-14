@@ -14,7 +14,7 @@ DS5_SAMPLES_PER_PACKET = 32  # 32 stereo samples per Report 0x32
 PACKET_INTERVAL = DS5_SAMPLES_PER_PACKET / DS5_HAPTIC_RATE  # ~10.67ms
 UDP_HOST = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 UDP_PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 5556  # Separate port for haptic data
-GAIN = 2000.0  # Amplification factor
+GAIN = 100.0  # Amplification factor
 
 p = pyaudio.PyAudio()
 
@@ -52,8 +52,8 @@ seq = 0
 send_until = 0.0  # timestamp until which we keep sending
 
 def float_to_uint8(f):
-    """Convert float [-1.0, 1.0] to uint8 [0, 255]."""
-    return max(0, min(255, int((f * GAIN + 1.0) * 127.5)))
+    """Convert float to uint8 [0, 255]. Center=128, GAIN scales amplitude."""
+    return max(0, min(255, int(f * GAIN * 127 + 128)))
 
 def send_haptic_packet():
     """Send a Report 0x32 haptic packet via UDP."""
