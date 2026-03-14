@@ -370,6 +370,7 @@ class DS5Server:
                 self.send_until = now + 1.0
             if now < self.send_until:
                 # Get client address from shared memory
+                nonlocal target
                 shared = self.read_shared_status()
                 if shared and shared['client_port'] > 0:
                     target = (shared['client_ip'], shared['client_port'])
