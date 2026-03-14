@@ -8,7 +8,7 @@ p = pyaudio.PyAudio()
 ds5_dev = None
 for i in range(p.get_device_count()):
     info = p.get_device_info_by_index(i)
-    if 'DualSense' in info['name'] and info['isLoopbackDevice']:
+    if 'DualSense' in info['name'] or 'Wireless Controller' in info['name'] and info['isLoopbackDevice']:
         ds5_dev = info
         break
 
