@@ -90,7 +90,7 @@ class IAudioCaptureClient(IUnknown):
 
 # Find DualSense render endpoint
 from pycaw.pycaw import IMMDeviceEnumerator, EDataFlow
-from comtypes import CLSID_MMDeviceEnumerator
+
 
 CLSID_MMDeviceEnumerator = GUID('{BCDE0395-E52F-467C-8E3D-C4579291692E}')
 IID_IMMDeviceEnumerator = GUID('{A95664D2-9614-4F35-A746-DE8DB63617E6}')
