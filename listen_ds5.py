@@ -14,7 +14,7 @@ DS5_SAMPLES_PER_PACKET = 32  # 32 stereo samples per Report 0x32
 PACKET_INTERVAL = DS5_SAMPLES_PER_PACKET / DS5_HAPTIC_RATE  # ~10.67ms
 UDP_HOST = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 UDP_PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 5556  # Separate port for haptic data
-GAIN = 200.0  # Amplification factor
+GAIN = 500.0  # Amplification factor
 
 p = pyaudio.PyAudio()
 
@@ -50,7 +50,6 @@ sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sample_buffer = bytearray()
 seq = 0
 send_until = 0.0  # timestamp until which we keep sending
-haptic_phase = 0.0  # sine wave phase for haptic generation
 
 def float_to_uint8(f):
     """Convert float to uint8 [0, 255]. Center=128, GAIN scales amplitude."""
@@ -84,32 +83,15 @@ def callback(in_data, frame_count, time_info, status):
     else:
         left = right = data[:, 0]
 
-    # Convert game audio energy into haptic sine wave
-    # Calculate RMS energy of this audio block
-    global haptic_phase
-    HAPTIC_FREQ = 150.0  # Hz - near DS5 motor resonance
-    
-    rms_l = np.sqrt(np.mean(left**2))
-    rms_r = np.sqrt(np.mean(right**2))
-    
-    # Scale RMS to haptic amplitude (0-120 range, center=128)
-    amplitude = max(rms_l, rms_r) * GAIN
-    amplitude = min(amplitude, 0.95)  # prevent full clip
-    
-    # Generate sine wave samples at 3kHz sample rate
-    n_samples = len(left) // downsample_ratio
-    for i in range(n_samples):
-        t = haptic_phase + i / DS5_HAPTIC_RATE
-        val = amplitude * np.sin(2 * np.pi * HAPTIC_FREQ * t)
-        sample = int(val * 127 + 128)
-        sample = max(0, min(255, sample))
-        sample_buffer.append(sample)  # L
-        sample_buffer.append(sample)  # R
-    
-    haptic_phase += n_samples / DS5_HAPTIC_RATE
-    # Keep phase from growing too large
-    if haptic_phase > 1.0:
-        haptic_phase -= 1.0
+    # Resample 48kHz -> 3kHz (preserve original haptic waveform)
+    target_len = len(left) // downsample_ratio
+    if target_len > 0:
+        from scipy.signal import resample
+        left_ds = resample(left, target_len)
+        right_ds = resample(right, target_len)
+        for i in range(target_len):
+            sample_buffer.append(float_to_uint8(left_ds[i]))
+            sample_buffer.append(float_to_uint8(right_ds[i]))
 
     # Calculate peak for gate and display
     peak = max(np.max(np.abs(left)), np.max(np.abs(right)))
