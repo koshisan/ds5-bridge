@@ -34,6 +34,10 @@ def ds5_bt_crc32(data):
     """CRC32 with DS5 BT seed byte 0xA2."""
     return zlib.crc32(bytes([0xA2]) + data) & 0xFFFFFFFF
 
+def ds5_bt_crc32_seed(data, seed):
+    """CRC32 with configurable seed byte."""
+    return zlib.crc32(bytes([seed]) + data) & 0xFFFFFFFF
+
 
 def output_receiver(sock, dev, is_bt, haptic_queue=None):
     """Receive output reports from host and write to real DS5."""
@@ -54,15 +58,19 @@ def output_receiver(sock, dev, is_bt, haptic_queue=None):
             # Feature request: [0x03, reportId]
             if data[0] == 0x03 and len(data) >= 2:
                 report_id = data[1]
-                print(f'  [FEATURE] GET 0x{report_id:02X} from {addr}')
                 try:
                     response = dev.get_feature_report(report_id, 256)
                     if response:
-                        pkt = bytes([0x04, report_id]) + bytes(response)
+                        resp_bytes = bytes(response)
+                        # BT feature reports may include report ID as first byte
+                        # Strip it if present to send clean data
+                        if resp_bytes[0] == report_id:
+                            resp_bytes = resp_bytes  # keep as-is, driver expects it
+                        pkt = bytes([0x04, report_id]) + resp_bytes
                         sock.sendto(pkt, addr)
-                        print(f'  [FEATURE] -> {len(response)}B: {bytes(response[:16]).hex(chr(32))}')
+                        print(f'  [FEATURE] GET 0x{report_id:02X} -> {len(resp_bytes)}B: {resp_bytes[:20].hex(chr(32))}')
                     else:
-                        print(f'  [FEATURE] -> empty response')
+                        print(f'  [FEATURE] GET 0x{report_id:02X} -> empty')
                 except Exception as e:
                     print(f'  [FEATURE] GET 0x{report_id:02X} error: {e}')
                 continue
@@ -70,10 +78,22 @@ def output_receiver(sock, dev, is_bt, haptic_queue=None):
             # Set feature: [0x05, reportId, data...]
             if data[0] == 0x05 and len(data) >= 2:
                 report_id = data[1]
-                payload = data[1:]
+                payload = data[1:]  # includes report ID
                 print(f'  [FEATURE] SET 0x{report_id:02X} ({len(payload)}B): {bytes(payload[:16]).hex(chr(32))}')
                 try:
-                    dev.send_feature_report(payload)
+                    if is_bt:
+                        # BT feature reports need CRC32 (seed 0xA3)
+                        # Format: [reportId, ...data..., CRC32]
+                        buf = bytearray(payload)
+                        # Pad to expected size if needed
+                        while len(buf) < 74:
+                            buf.append(0)
+                        crc = ds5_bt_crc32_seed(bytes(buf[:len(buf)]), 0xA3)
+                        buf.extend(struct.pack("<I", crc))
+                        dev.send_feature_report(bytes(buf))
+                        print(f'  [FEATURE] SET 0x{report_id:02X} BT with CRC ({len(buf)}B)')
+                    else:
+                        dev.send_feature_report(payload)
                 except Exception as e:
                     print(f'  [FEATURE] SET 0x{report_id:02X} error: {e}')
                 continue
