@@ -6,6 +6,7 @@
 === スピーカー (2- DualSense Wireless Controller) ===
   ID: {0.0.0.00000000}.{d0945d30-0301-4b17-881a-86acce2e37b8}
   State: AudioDeviceState.Active
+  [DeviceFormat] raw bytes: 65:?
 
 === ヘッドセット マイク (DualSense Wireless Controller) ===
   ID: {0.0.1.00000000}.{9e21321e-c961-4f88-8584-5024d56b7ff8}
@@ -14,7 +15,4 @@
 === ヘッドセット マイク (2- DualSense Wireless Controller) ===
   ID: {0.0.1.00000000}.{e5c6d9b5-7665-4731-9cba-dd75abc56d96}
   State: AudioDeviceState.Active
-
-=== Mix Formats (IAudioClient.GetMixFormat) ===
-  スピーカー (2- DualSense Wireless Controller): ERROR 'POINTER(IUnknown)' object has no attribute 'GetMixFormat'
-  ヘッドセット マイク (2- DualSense Wireless Controller): ERROR 'POINTER(IUnknown)' object has no attribute 'GetMixFormat'
+  [DeviceFormat] raw bytes: 65:?
