@@ -40,7 +40,7 @@ DEFAULT_CONFIG = {
     'threshold': 0.009,
     'autostart': False,
     'auto_enable_hid': True,
-    'auto_enable_audio': True,
+    'auto_capture': True,
 }
 
 def load_config():
@@ -293,8 +293,9 @@ class DS5GUI:
         self._build_ui()
         self._update_loop()
 
-        # Auto-start capture
-        self.server.start_capture()
+        # Auto-start capture if configured
+        if self.server.config.get('auto_capture', True):
+            self.server.start_capture()
 
     def _build_ui(self):
         # --- Status Frame ---
@@ -309,6 +310,9 @@ class DS5GUI:
 
         self.lbl_peak = ttk.Label(status_frame, text="Peak: 0.000")
         self.lbl_peak.grid(row=0, column=2, sticky='w')
+
+        self.lbl_capture_info = ttk.Label(status_frame, text="", foreground='gray')
+        self.lbl_capture_info.grid(row=1, column=0, sticky='w', columnspan=3)
 
         # --- Driver Shared Memory ---
         driver_frame = ttk.LabelFrame(self.root, text="Driver (Shared Memory)", padding=10)
@@ -353,9 +357,7 @@ class DS5GUI:
                    command=lambda: self._driver_action(AUDIO_HWID, True)).grid(row=5, column=1, padx=5)
         ttk.Button(drv_frame, text="Disable", width=8,
                    command=lambda: self._driver_action(AUDIO_HWID, False)).grid(row=5, column=2)
-        self.auto_audio_var = tk.BooleanVar(value=self.server.config.get('auto_enable_audio', True))
-        ttk.Checkbutton(drv_frame, text="Auto-Enable", variable=self.auto_audio_var,
-                       command=lambda: self._save_auto('auto_enable_audio', self.auto_audio_var.get())).grid(row=5, column=3, padx=10)
+
 
         # --- Capture ---
         cap_frame = ttk.LabelFrame(self.root, text="Haptic Capture", padding=10)
@@ -370,8 +372,9 @@ class DS5GUI:
                      width=6, state='readonly').grid(row=0, column=2)
         self.threshold_var.trace_add('write', lambda *a: self._update_threshold())
 
-        self.lbl_capture_info = ttk.Label(cap_frame, text="", foreground='gray')
-        self.lbl_capture_info.grid(row=1, column=0, sticky='w', columnspan=4, pady=(5,0))
+        self.auto_capture_var = tk.BooleanVar(value=self.server.config.get('auto_capture', True))
+        ttk.Checkbutton(cap_frame, text="Auto-Start", variable=self.auto_capture_var,
+                       command=lambda: self._save_auto('auto_capture', self.auto_capture_var.get())).grid(row=0, column=3, padx=10)
 
         # --- Bottom ---
         bot_frame = ttk.Frame(self.root, padding=10)
