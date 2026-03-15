@@ -253,6 +253,7 @@ class DS5Client:
         self._haptic_peak_time = 0.0
         self.haptic_count = 0
         self.haptic_waveform = None
+        self.haptic_input_peak = 0.0
 
     def log(self, msg):
         ts = datetime.now().strftime('%H:%M:%S')
@@ -691,6 +692,15 @@ class DS5Client:
         if data[0] == 0x40:
             raw_s16 = data[2:]
 
+            # Input peak (raw s16, before any processing)
+            if len(raw_s16) >= 4:
+                max_val = 0
+                for i in range(0, min(len(raw_s16), 512), 2):
+                    val = abs(int.from_bytes(raw_s16[i:i+2], 'little', signed=True))
+                    if val > max_val:
+                        max_val = val
+                self.haptic_input_peak = max_val / 32768.0
+
             if not self.is_bt:
                 # USB mode: forward s16 directly to DS5 speaker
                 if self._start_usb_audio():
@@ -982,7 +992,8 @@ class DS5ClientGUI:
             rate = self.client.haptic_count / max(1, time.monotonic() - self.client._rate_time)
             self.lbl_haptic.config(
                 text=f'Packets: {self.client.haptic_count}  |  '
-                     f'Peak: {self.client.haptic_peak:.3f}  |  '
+                     f'In: {self.client.haptic_input_peak:.3f}  |  '
+                     f'Out: {self.client.haptic_peak:.3f}  |  '
                      f'Hold: {self.client.haptic_peak_hold:.3f}')
             self._draw_peak_meter()
         else:
