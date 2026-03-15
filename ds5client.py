@@ -35,6 +35,7 @@ DEFAULT_CONFIG = {
     'client_port': 0,  # 0 = random ephemeral port
     'protocol': 'udp',  # udp or tcp
     'autostart': False,
+    'debug_output_reports': False,
 }
 
 # --- CRC ---
@@ -43,6 +44,100 @@ def ds5_bt_crc32(data):
 
 def ds5_crc32_payload(seed_bytes, data_bytes):
     return zlib.crc32(bytes(seed_bytes) + bytes(data_bytes)) & 0xFFFFFFFF
+
+
+
+# --- Output Report Decoder ---
+_FLAG0_BITS = [
+    (0x01, 'Motor(graceful)'),
+    (0x02, 'Motor(instant)'),
+    (0x04, 'RightTrigger'),
+    (0x08, 'LeftTrigger'),
+    (0x10, 'HeadphoneVol'),
+    (0x20, 'SpeakerToggle'),
+    (0x40, 'MicVol'),
+    (0x80, 'MicToggle'),
+]
+_FLAG1_BITS = [
+    (0x01, 'MicLED'),
+    (0x02, 'AudioMute'),
+    (0x04, 'Lightbar'),
+    (0x08, 'AllLEDsOff'),
+    (0x10, 'PlayerLEDs'),
+    (0x20, 'Unk0x20'),
+    (0x40, 'MotorPower'),
+    (0x80, 'Unk0x80'),
+]
+_TRIGGER_MODES = {
+    0x00: 'Off', 0x01: 'Resistance', 0x02: 'Section',
+    0x05: 'Disengage', 0x06: 'Vibrate', 0x21: 'Calibrate',
+    0x22: 'Unk0x22', 0x25: 'VibResist', 0x26: 'VibSection',
+    0xFC: 'Debug',
+}
+
+def decode_output_report(data):
+    """Decode USB output report (0x02) into human-readable fields."""
+    if len(data) < 48:
+        return f'[OUTPUT] Too short ({len(data)}B): {data[:20].hex(" ")}'
+
+    # data[0]=0x02, data[1]=flag0, data[2]=flag1
+    f0, f1 = data[1], data[2]
+
+    flags0 = '+'.join(name for bit, name in _FLAG0_BITS if f0 & bit) or 'None'
+    flags1 = '+'.join(name for bit, name in _FLAG1_BITS if f1 & bit) or 'None'
+
+    parts = [f'Flags: [{flags0}] [{flags1}]']
+
+    # Motors
+    if f0 & 0x03:
+        parts.append(f'Motor R={data[3]} L={data[4]}')
+
+    # Right trigger (bytes 11-21)
+    if f0 & 0x04:
+        mode = data[11]
+        mode_name = _TRIGGER_MODES.get(mode, f'0x{mode:02X}')
+        params = data[12:22]
+        parts.append(f'RTrig: {mode_name} P={params.hex()}')
+
+    # Left trigger (bytes 22-32)
+    if f0 & 0x08:
+        mode = data[22]
+        mode_name = _TRIGGER_MODES.get(mode, f'0x{mode:02X}')
+        params = data[23:33]
+        parts.append(f'LTrig: {mode_name} P={params.hex()}')
+
+    # Audio
+    if f0 & 0x10:
+        parts.append(f'HeadVol={data[5]}')
+    if f0 & 0x20 or f0 & 0x40:
+        parts.append(f'SpkVol={data[6]} MicVol={data[7]}')
+
+    # Mic LED
+    if f1 & 0x01:
+        parts.append(f'MicLED={data[9]}')
+
+    # Mute
+    if f1 & 0x02:
+        m = data[10]
+        mute = []
+        if m & 0x10: mute.append('Mic')
+        if m & 0x40: mute.append('Audio')
+        parts.append(f'Mute={"+".join(mute) if mute else "None"}')
+
+    # Motor/effect power reduction
+    if f1 & 0x40:
+        p = data[37]
+        parts.append(f'Power: Motor={p & 0x0F}/7 Trigger={p >> 4}/7')
+
+    # Player LEDs
+    if f1 & 0x10:
+        parts.append(f'PlayerLED=0x{data[44]:02X} Bright={data[43]}')
+
+    # Lightbar
+    if f1 & 0x04:
+        parts.append(f'Light=({data[45]},{data[46]},{data[47]})')
+
+    return ' | '.join(parts)
 
 
 # --- Config ---
@@ -370,6 +465,8 @@ class DS5Client:
                     self.dev.write(bytes(data))
 
                 self.packets_recv += 1
+                if self.config.get('debug_output_reports', False):
+                    self.log(decode_output_report(data))
 
             except socket.timeout:
                 continue
@@ -559,6 +656,14 @@ class DS5ClientGUI:
         ttk.Radiobutton(proto_frame, text='UDP', variable=self.proto_var, value='udp').pack(side='left', padx=(0, 12))
         ttk.Radiobutton(proto_frame, text='TCP', variable=self.proto_var, value='tcp').pack(side='left')
 
+        # Debug
+        dbg_frame = ttk.LabelFrame(tab_config, text='Debug', padding=8)
+        dbg_frame.pack(fill='x', pady=(0, 8))
+
+        self.debug_output_var = tk.BooleanVar(value=self.client.config.get('debug_output_reports', False))
+        ttk.Checkbutton(dbg_frame, text='Log incoming output reports (decoded)', variable=self.debug_output_var,
+                       command=lambda: self._save_debug('debug_output_reports', self.debug_output_var.get())).grid(row=0, column=0, sticky='w')
+
         # Autostart
         opt_frame = ttk.LabelFrame(tab_config, text='Options', padding=8)
         opt_frame.pack(fill='x', pady=(0, 8))
@@ -686,6 +791,10 @@ class DS5ClientGUI:
         self.client.config['protocol'] = self.proto_var.get()
         save_config(self.client.config)
         self.client.log('Config saved (restart bridge to apply)')
+
+    def _save_debug(self, key, val):
+        self.client.config[key] = val
+        save_config(self.client.config)
 
     def _toggle_autostart(self):
         enabled = self.autostart_var.get()
