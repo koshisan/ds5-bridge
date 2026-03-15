@@ -273,22 +273,33 @@ class DS5Server:
         """Find PnP device by hardware ID. Returns (instance_id, name, status) or None."""
         try:
             r = subprocess.run(
-                ['wmic', 'path', 'Win32_PnPEntity', 'get', 'PNPDeviceID,Name,Status', '/format:csv'],
-                capture_output=True, text=True, errors='replace', timeout=8,
-                creationflags=0x08000000)
+                ['pnputil', '/enum-devices', '/ids'],
+                capture_output=True, text=True, errors='replace', timeout=8)
             hwid_upper = hwid.upper()
-            for line in r.stdout.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                parts = line.split(',')
-                # CSV format: Node,Name,PNPDeviceID,Status
-                if len(parts) >= 4:
-                    pnp_id = parts[-2]
-                    if pnp_id.upper().startswith(hwid_upper):
-                        name = ','.join(parts[1:-2])  # Name might contain commas
-                        status = parts[-1]
-                        return pnp_id, name, status
+            blocks = r.stdout.split(chr(10) + chr(10))
+            for block in blocks:
+                if hwid_upper in block.upper():
+                    iid = ''
+                    name = '-'
+                    status = 'Unknown'
+                    for bline in block.splitlines():
+                        bline = bline.strip()
+                        if bline.startswith('Instance ID:') or bline.startswith('Instanz-ID:'):
+                            iid = bline.split(':', 1)[1].strip()
+                        elif bline.startswith('Device Description:') or bline.startswith('Ger'):
+                            name = bline.split(':', 1)[1].strip()
+                        elif bline.startswith('Status:'):
+                            raw = bline.split(':', 1)[1].strip()
+                            if 'Started' in raw or 'Gestartet' in raw:
+                                status = 'OK'
+                            elif 'Disabled' in raw or 'Deaktiviert' in raw:
+                                status = 'Disabled'
+                            elif 'Stopped' in raw:
+                                status = 'Stopped'
+                            else:
+                                status = raw
+                    if iid:
+                        return iid, name, status
         except Exception as e:
             print(f"[DEV] find error: {e}")
         return None
@@ -638,15 +649,9 @@ class DS5GUI:
         version = '-'
         try:
             r = subprocess.run(
-                ['wmic', 'path', 'Win32_PnPSignedDriver', 'get', 'DeviceID,DriverVersion', '/format:csv'],
-                capture_output=True, text=True, errors='replace', timeout=8,
-                creationflags=0x08000000)
-            for line in r.stdout.splitlines():
-                parts = line.strip().split(',')
-                if len(parts) >= 3 and iid.upper() in parts[1].upper():
-                    if parts[2]:
-                        version = parts[2]
-                    break
+                ['pnputil', '/enum-drivers'],
+                capture_output=True, text=True, errors='replace', timeout=8)
+            # Version detection is nice-to-have, skip if pnputil doesn't show it
         except Exception:
             pass
         return status, name, version, '-'
