@@ -34,6 +34,7 @@ DEFAULT_CONFIG = {
     'server_port': 5555,
     'client_port': 0,  # 0 = random ephemeral port
     'protocol': 'udp',  # udp or tcp
+    'haptic_gain': 4,
     'autostart': False,
     'debug_output_reports': False,
 }
@@ -800,6 +801,18 @@ class DS5ClientGUI:
         ttk.Radiobutton(proto_frame, text='UDP', variable=self.proto_var, value='udp').pack(side='left', padx=(0, 12))
         ttk.Radiobutton(proto_frame, text='TCP', variable=self.proto_var, value='tcp').pack(side='left')
 
+        # Haptic Gain
+        haptic_frame = ttk.LabelFrame(tab_config, text='Haptic Audio', padding=8)
+        haptic_frame.pack(fill='x', pady=(0, 8))
+
+        ttk.Label(haptic_frame, text='Gain:').grid(row=0, column=0, sticky='w', padx=(0, 8))
+        self.gain_var = tk.IntVar(value=self.client.config.get('haptic_gain', 4))
+        self.gain_slider = tk.Scale(haptic_frame, from_=1, to=32, orient='horizontal',
+                                     variable=self.gain_var, command=self._update_gain, length=250)
+        self.gain_slider.grid(row=0, column=1, sticky='w')
+        self.lbl_gain = ttk.Label(haptic_frame, text=f'x{self.gain_var.get()}')
+        self.lbl_gain.grid(row=0, column=2, padx=(8, 0))
+
         # Debug
         dbg_frame = ttk.LabelFrame(tab_config, text='Debug', padding=8)
         dbg_frame.pack(fill='x', pady=(0, 8))
@@ -1003,6 +1016,12 @@ class DS5ClientGUI:
         self.client.config['protocol'] = self.proto_var.get()
         save_config(self.client.config)
         self.client.log('Config saved (restart bridge to apply)')
+
+    def _update_gain(self, val):
+        g = int(val)
+        self.client.config['haptic_gain'] = g
+        self.lbl_gain.config(text=f'x{g}')
+        save_config(self.client.config)
 
     def _save_debug(self, key, val):
         self.client.config[key] = val
