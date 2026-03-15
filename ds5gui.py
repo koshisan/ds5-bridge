@@ -675,7 +675,7 @@ class DS5GUI:
                     points.append((x, y))
                 if len(points) >= 2:
                     flat = [coord for pt in points for coord in pt]
-                    cv.create_line(*flat, fill='#3366cc', width=1)
+                    cv.create_line(*flat, fill='#66aaff', width=1)
             except Exception:
                 pass
 
