@@ -442,7 +442,7 @@ class DS5GUI:
         self.server = DS5Server()
         self.root = tk.Tk()
         self.root.title("DS5 Bridge Server")
-        self.root.geometry("580x680")
+        self.root.geometry("580x520")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._build_ui()
@@ -553,20 +553,6 @@ class DS5GUI:
         ttk.Checkbutton(cap_frame, text="Auto-Start", variable=self.auto_capture_var,
                        command=lambda: self._save_auto('auto_capture', self.auto_capture_var.get())).grid(row=0, column=3, padx=10)
 
-        # --- Waveform Monitor ---
-        wave_frame = ttk.LabelFrame(self.root, text="Waveform Monitor", padding=5)
-        wave_frame.pack(fill='x', padx=10, pady=5)
-
-        wave_labels = ttk.Frame(wave_frame)
-        wave_labels.pack(fill='x')
-        self.lbl_source_peak = ttk.Label(wave_labels, text="Source: -", foreground='gray')
-        self.lbl_source_peak.pack(side='left')
-        self.lbl_output_peak = ttk.Label(wave_labels, text="Output: -", foreground='gray')
-        self.lbl_output_peak.pack(side='right')
-
-        self.wave_canvas = tk.Canvas(wave_frame, height=80, bg='#1a1a1a', highlightthickness=0)
-        self.wave_canvas.pack(fill='x', pady=(4, 0))
-
         # --- Bottom ---
         bot_frame = ttk.Frame(self.root, padding=10)
         bot_frame.pack(fill='x', padx=10)
@@ -616,71 +602,8 @@ class DS5GUI:
         if self._update_count % 5 == 0:
             self._refresh_drivers()
 
-        # Waveform
-        self._draw_waveform()
-        self.lbl_source_peak.config(text=f"Source: {self.server.source_peak:.4f}")
-        self.lbl_output_peak.config(text=f"Output: {self.server.output_peak:.3f}")
+        self.root.after(1000, self._update_loop)
 
-        self.root.after(100, self._update_loop)
-
-    def _draw_waveform(self):
-        cv = self.wave_canvas
-        cv.delete('all')
-        w = cv.winfo_width() or 550
-        h = cv.winfo_height() or 80
-        mid = h // 2
-
-        # Center line
-        cv.create_line(0, mid, w, mid, fill='#333333')
-
-        src = self.server.wave_source
-        out = self.server.wave_output
-
-        # Shared scale: use the larger of both ranges (minimum 100 for s16 / 2 for u8)
-        src_max = 100.0
-        out_max = 2
-        if src and len(src) > 1:
-            m = max(abs(float(v)) for v in src)
-            if m > src_max:
-                src_max = m
-        if out and len(out) > 1:
-            m = max(abs(b - 128) for b in out)
-            if m > out_max:
-                out_max = m
-
-        # Source waveform (s16 post-resample, blue)
-        if src is not None and len(src) > 1:
-            try:
-                points = []
-                n = len(src)
-                for i in range(n):
-                    x = int(i * w / n)
-                    y = mid - int((float(src[i]) / src_max) * mid * 0.85)
-                    points.append((x, y))
-                if len(points) >= 2:
-                    flat = [coord for pt in points for coord in pt]
-                    cv.create_line(*flat, fill='#66aaff', width=1)
-            except Exception:
-                pass
-
-        # Output waveform (u8, green) — same time window
-        if out and len(out) > 1:
-            try:
-                points = []
-                n = len(out)
-                for i in range(n):
-                    x = int(i * w / n)
-                    y = mid - int(((out[i] - 128) / out_max) * mid * 0.85)
-                    points.append((x, y))
-                if len(points) >= 2:
-                    flat = [coord for pt in points for coord in pt]
-                    cv.create_line(*flat, fill='#33cc66', width=2)
-            except Exception:
-                pass
-
-        # Scale label
-        cv.create_text(w - 4, 4, anchor='ne', text=f's16:{src_max:.0f} u8:{out_max}',
-                      fill='#555555', font=('Consolas', 7))
 
     def _driver_action(self, hwid, enable):
         def do():
