@@ -519,120 +519,55 @@ class DS5Client:
             self.log(f'Feature SET 0x{report_id:02X} error: {e}')
 
     _haptic_seq = 0
-    _haptic_buffer = None
-    _haptic_sender_running = False
-    _haptic_lock = None
-
-    def _start_haptic_sender(self):
-        if self._haptic_sender_running:
-            return
-        self._haptic_sender_running = True
-        self._haptic_buffer = bytearray()
-        self._haptic_lock = threading.Lock()
-        t = threading.Thread(target=self._haptic_send_loop, daemon=True)
-        t.start()
-        self.log('Haptic sender started (10.67ms interval)')
-
-    def _haptic_send_loop(self):
-        INTERVAL = 1.0 / 93.75
-        REPORT_ID = 0x32
-        PAYLOAD_SIZE = 136
-        next_send = time.monotonic()
-
-        while self.running and self._haptic_sender_running:
-            now = time.monotonic()
-            if now < next_send:
-                sleep_time = next_send - now
-                if sleep_time > 0.002:
-                    time.sleep(sleep_time - 0.001)
-                while time.monotonic() < next_send:
-                    pass
-
-            next_send += INTERVAL
-            if next_send < time.monotonic() - 0.1:
-                next_send = time.monotonic()
-
-            with self._haptic_lock:
-                if len(self._haptic_buffer) >= 64:
-                    audio_data = bytes(self._haptic_buffer[:64])
-                    del self._haptic_buffer[:64]
-                else:
-                    audio_data = None
-
-            if audio_data is None:
-                continue
-
-            self.haptic_waveform = list(audio_data[:64])
-            peak = max(abs(b - 128) for b in audio_data) / 128.0
-            self.haptic_peak = peak
-            self.haptic_count += 1
-            mono_now = time.monotonic()
-            if peak >= self.haptic_peak_hold:
-                self.haptic_peak_hold = peak
-                self._haptic_peak_time = mono_now
-            elif mono_now - self._haptic_peak_time > 1.5:
-                self.haptic_peak_hold = max(self.haptic_peak_hold - 0.01, peak)
-
-            seq = self._haptic_seq
-            pkt_0x11 = bytes([
-                (0x11 & 0x3F) | (1 << 7), 7,
-                0b11111110, 0, 0, 0, 0, seq & 0xFF, 0
-            ])
-            pkt_0x12_header = bytes([(0x12 & 0x3F) | (1 << 7), 64])
-            packets = pkt_0x11 + pkt_0x12_header + audio_data
-            payload = packets.ljust(PAYLOAD_SIZE, b'\x00')
-            tag_seq = (seq & 0x0F) << 4
-            report_body = bytes([tag_seq]) + payload
-            crc = ds5_bt_crc32(bytes([REPORT_ID]) + report_body)
-            report = bytes([REPORT_ID]) + report_body + struct.pack('<I', crc)
-            self.dev.write(report)
-            self._haptic_seq = (seq + 1) & 0x0F
 
     def _handle_haptic(self, data):
         if not self.is_bt:
             return
 
+        # 0x40: raw s16 stream - take raw bytes directly (no resampling)
+        # 0x32: legacy u8 format
         if data[0] == 0x40:
-            if not self._haptic_sender_running:
-                self._start_haptic_sender()
-            raw = data[2:]
-            n_samples = len(raw) // 4
-            if n_samples == 0:
-                return
-            try:
-                from scipy.signal import resample as sp_resample
-                import numpy as np
-                left = np.zeros(n_samples, dtype=np.float64)
-                right = np.zeros(n_samples, dtype=np.float64)
-                for i in range(n_samples):
-                    l, r = struct.unpack_from('<hh', raw, i * 4)
-                    left[i] = l
-                    right[i] = r
-                target_len = max(1, n_samples * 3000 // 48000)
-                left_ds = sp_resample(left, target_len)
-                right_ds = sp_resample(right, target_len)
-                u8_data = bytearray()
-                for i in range(target_len):
-                    l_s16 = int(np.clip(left_ds[i], -32768, 32767))
-                    r_s16 = int(np.clip(right_ds[i], -32768, 32767))
-                    u8_data.append(((l_s16 >> 8) + 128) & 0xFF)
-                    u8_data.append(((r_s16 >> 8) + 128) & 0xFF)
-                with self._haptic_lock:
-                    self._haptic_buffer.extend(u8_data)
-                    if len(self._haptic_buffer) > 12000:
-                        del self._haptic_buffer[:len(self._haptic_buffer) - 12000]
-            except ImportError:
-                self.log('scipy required: pip install scipy numpy')
-                self._haptic_sender_running = False
+            audio_samples = data[2:66]  # first 64 bytes of raw s16 payload
+        else:
+            audio_samples = data[2:66]
 
-        elif data[0] == 0x32:
-            if not self._haptic_sender_running:
-                self._start_haptic_sender()
-            audio = data[2:66]
-            if len(audio) < 64:
-                audio = audio + bytes(64 - len(audio))
-            with self._haptic_lock:
-                self._haptic_buffer.extend(audio)
+        if len(audio_samples) < 64:
+            audio_samples = audio_samples + bytes(64 - len(audio_samples))
+
+        # Waveform capture
+        self.haptic_waveform = list(audio_samples[:64])
+
+        # Peak measurement (u8: 128=center, 0/255=max)
+        peak = max(abs(b - 128) for b in audio_samples) / 128.0
+        self.haptic_peak = peak
+        self.haptic_count += 1
+        now = time.monotonic()
+        if peak >= self.haptic_peak_hold:
+            self.haptic_peak_hold = peak
+            self._haptic_peak_time = now
+        elif now - self._haptic_peak_time > 1.5:
+            self.haptic_peak_hold = max(self.haptic_peak_hold - 0.01, peak)
+
+        seq = self._haptic_seq
+        REPORT_ID = 0x32
+        payload_size = 136
+
+        pkt_0x11 = bytes([
+            (0x11 & 0x3F) | (1 << 7), 7,
+            0b11111110, 0, 0, 0, 0, seq & 0xFF, 0
+        ])
+        pkt_0x12_header = bytes([
+            (0x12 & 0x3F) | (1 << 7), 64,
+        ])
+        packets = pkt_0x11 + pkt_0x12_header + bytes(audio_samples)
+        payload = packets.ljust(payload_size, b'\x00')
+        tag_seq = (seq & 0x0F) << 4
+        report_body = bytes([tag_seq]) + payload
+        crc_data = bytes([REPORT_ID]) + report_body
+        crc = ds5_bt_crc32(crc_data)
+        report = bytes([REPORT_ID]) + report_body + struct.pack('<I', crc)
+        self.dev.write(report)
+        self._haptic_seq = (seq + 1) & 0x0F
 
 
 class DS5ClientGUI:
