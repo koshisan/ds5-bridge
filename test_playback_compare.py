@@ -47,16 +47,30 @@ print("Done")
 time.sleep(1)
 
 print(f"\n=== pyaudiowpatch (4ch, ch3+4) ===")
-stream = pa.open(format=pyaudio.paInt16, channels=4, rate=rate, output=True,
-                 output_device_index=ds5_pa['index'], frames_per_buffer=1024)
+import threading
+pos = [0]
 raw = out_4ch[:max_samples].tobytes()
-bytes_per_frame = 4 * 2  # 4 channels * 2 bytes
-chunk_frames = 1024
-chunk_bytes = chunk_frames * bytes_per_frame
-for i in range(0, len(raw), chunk_bytes):
-    block = raw[i:i + chunk_bytes]
-    if block:
-        stream.write(block)
+bytes_per_frame = 4 * 2
+done_event = threading.Event()
+
+def callback(in_data, frame_count, time_info, status):
+    start = pos[0]
+    end = start + frame_count * bytes_per_frame
+    chunk = raw[start:end]
+    if len(chunk) < frame_count * bytes_per_frame:
+        chunk = chunk + b"\x00" * (frame_count * bytes_per_frame - len(chunk))
+        pos[0] = len(raw)
+        done_event.set()
+        return (chunk, pyaudio.paComplete)
+    pos[0] = end
+    return (chunk, pyaudio.paContinue)
+
+stream = pa.open(format=pyaudio.paInt16, channels=4, rate=rate, output=True,
+                 output_device_index=ds5_pa["index"], frames_per_buffer=1024,
+                 stream_callback=callback)
+stream.start_stream()
+done_event.wait(timeout=10)
+time.sleep(0.5)
 stream.stop_stream()
 stream.close()
 pa.terminate()
