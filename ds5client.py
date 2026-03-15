@@ -354,6 +354,16 @@ class DS5Client:
 
     def disconnect(self):
         """Disconnect from DS5."""
+        if self._usb_audio_stream:
+            try:
+                self._usb_audio_stream.stop_stream()
+                self._usb_audio_stream.close()
+            except: pass
+            self._usb_audio_stream = None
+        if self._usb_audio_pa:
+            try: self._usb_audio_pa.terminate()
+            except: pass
+            self._usb_audio_pa = None
         self.stop()
         if self.dev:
             try: self.dev.close()
@@ -640,33 +650,91 @@ class DS5Client:
                 self._update_peak(audio)
                 self._send_report_0x32(audio)
 
+    _usb_audio_stream = None
+    _usb_audio_pa = None
+
+    def _start_usb_audio(self):
+        """Open USB audio output stream to DS5 speaker."""
+        if self._usb_audio_stream:
+            return True
+        try:
+            import pyaudiowpatch as pyaudio
+            self._usb_audio_pa = pyaudio.PyAudio()
+            # Find DS5 USB speaker (output, not loopback)
+            ds5_out = None
+            for i in range(self._usb_audio_pa.get_device_count()):
+                info = self._usb_audio_pa.get_device_info_by_index(i)
+                name = info.get('name', '')
+                if ('DualSense' in name or 'Wireless Controller' in name) and info['maxOutputChannels'] >= 2 and not info.get('isLoopbackDevice'):
+                    ds5_out = info
+                    break
+            if not ds5_out:
+                self.log('USB: DS5 speaker not found')
+                return False
+            # Open 4ch/48kHz/S16 to match DS5 USB format
+            channels = min(int(ds5_out['maxOutputChannels']), 4)
+            self._usb_audio_stream = self._usb_audio_pa.open(
+                format=pyaudio.paInt16,
+                channels=channels,
+                rate=48000,
+                output=True,
+                output_device_index=ds5_out['index'],
+                frames_per_buffer=256)
+            self._usb_channels = channels
+            self.log(f'USB: Opened DS5 speaker ({ds5_out["name"]}, {channels}ch, 48kHz)')
+            return True
+        except Exception as e:
+            self.log(f'USB audio error: {e}')
+            return False
+
     def _handle_haptic(self, data):
-        if not self.is_bt:
-            return
-
-        if not self._haptic_sender_running:
-            self._start_haptic_sender()
-
-        mode = self.config.get('haptic_mode', 'raw')
-
         if data[0] == 0x40:
-            raw = data[2:]
+            raw_s16 = data[2:]
+
+            if not self.is_bt:
+                # USB mode: forward s16 directly to DS5 speaker
+                if self._start_usb_audio():
+                    try:
+                        if self._usb_channels == 4:
+                            # Server sends ch3+4, we need to put them in ch3+4 of 4ch output
+                            n_samples = len(raw_s16) // 4
+                            out = bytearray(n_samples * 8)  # 4ch * 2 bytes per sample
+                            for i in range(n_samples):
+                                # ch1+2 = silence, ch3+4 = haptic L+R
+                                out[i*8+4:i*8+8] = raw_s16[i*4:i*4+4]
+                            self._usb_audio_stream.write(bytes(out))
+                        else:
+                            # 2ch: just write stereo directly
+                            self._usb_audio_stream.write(bytes(raw_s16))
+                        self.haptic_count += 1
+                    except Exception as e:
+                        self.log(f'USB write error: {e}')
+                return
+
+            # BT mode: existing logic
+            if not self._haptic_sender_running:
+                self._start_haptic_sender()
+
+            mode = self.config.get('haptic_mode', 'raw')
             with self._haptic_lock:
                 if mode == 'resample':
-                    self._haptic_s16_buffer.extend(raw)
+                    self._haptic_s16_buffer.extend(raw_s16)
                     if len(self._haptic_s16_buffer) > 48000 * 4:
                         del self._haptic_s16_buffer[:len(self._haptic_s16_buffer) - 48000 * 4]
-                else:  # raw: take bytes directly
-                    self._haptic_u8_buffer.extend(raw[:64])
+                else:
+                    self._haptic_u8_buffer.extend(raw_s16[:64])
                     if len(self._haptic_u8_buffer) > 12000:
                         del self._haptic_u8_buffer[:len(self._haptic_u8_buffer) - 12000]
 
         elif data[0] == 0x32:
-            audio = data[2:66]
-            if len(audio) < 64:
-                audio = audio + bytes(64 - len(audio))
-            with self._haptic_lock:
-                self._haptic_u8_buffer.extend(audio)
+            if self.is_bt:
+                if not self._haptic_sender_running:
+                    self._start_haptic_sender()
+                audio = data[2:66]
+                if len(audio) < 64:
+                    audio = audio + bytes(64 - len(audio))
+                with self._haptic_lock:
+                    self._haptic_u8_buffer.extend(audio)
 
 
 class DS5ClientGUI:
