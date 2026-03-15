@@ -911,7 +911,7 @@ class DS5ClientGUI:
 
         ttk.Label(haptic_frame, text='Gain:').grid(row=0, column=0, sticky='w', padx=(0, 8))
         self.gain_var = tk.DoubleVar(value=self.client.config.get('haptic_gain', 2.0))
-        self.gain_slider = tk.Scale(haptic_frame, from_=0.5, to=128.0, resolution=0.1,
+        self.gain_slider = tk.Scale(haptic_frame, from_=0.5, to=10000.0, resolution=0.1,
                                      orient='horizontal', variable=self.gain_var,
                                      command=self._update_gain, length=250)
         self.gain_slider.grid(row=0, column=1, sticky='w')
