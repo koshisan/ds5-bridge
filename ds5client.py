@@ -34,7 +34,7 @@ DEFAULT_CONFIG = {
     'server_port': 5555,
     'client_port': 0,  # 0 = random ephemeral port
     'protocol': 'udp',  # udp or tcp
-    'haptic_gain': 4,
+    'haptic_gain': 2.0,
     'haptic_mode': 'raw',  # raw or resample
     'haptic_timed': True,
     'autostart': False,
@@ -186,7 +186,7 @@ def read_ds5_info(dev, is_bt):
             info['hw_version'] = f'{r[1]}.{r[2]}.{r[3]}'
     except: pass
 
-    # 0x80/0x81 subcommands (BT only — need CRC)
+    # 0x80/0x81 subcommands (BT only — need CRC, USB uses different format)
     if is_bt:
         subcmds = [
             (0x01, 0x13, 'serial'),
@@ -472,7 +472,7 @@ class DS5Client:
                 if data[0] not in (0x02, 0x03, 0x05):
                     self.log(f'Unknown packet: 0x{data[0]:02X} len={len(data)}')
 
-                # Output report (0x02)
+                # Output report
                 if self.is_bt:
                     bt_out = bytearray(78)
                     bt_out[0] = 0x31
@@ -486,7 +486,11 @@ class DS5Client:
                     self.dev.write(bytes(bt_out))
                     seq = (seq + 16) & 0xFF
                 else:
-                    self.dev.write(bytes(data))
+                    # USB: write output report directly (already USB format)
+                    try:
+                        self.dev.write(bytes(data))
+                    except Exception:
+                        pass  # USB may reject some reports
 
                 self.packets_recv += 1
                 if self.config.get('debug_output_reports', False):
@@ -705,17 +709,28 @@ class DS5Client:
                 # USB mode: forward s16 directly to DS5 speaker
                 if self._start_usb_audio():
                     try:
+                        gain = self.config.get('haptic_gain', 2.0)
+                        n_samples = len(raw_s16) // 4
                         if self._usb_channels == 4:
-                            # Server sends ch3+4, we need to put them in ch3+4 of 4ch output
-                            n_samples = len(raw_s16) // 4
-                            out = bytearray(n_samples * 8)  # 4ch * 2 bytes per sample
+                            out = bytearray(n_samples * 8)
                             for i in range(n_samples):
-                                # ch1+2 = silence, ch3+4 = haptic L+R
-                                out[i*8+4:i*8+8] = raw_s16[i*4:i*4+4]
+                                l = int.from_bytes(raw_s16[i*4:i*4+2], 'little', signed=True)
+                                r = int.from_bytes(raw_s16[i*4+2:i*4+4], 'little', signed=True)
+                                l = max(-32768, min(32767, int(l * gain)))
+                                r = max(-32768, min(32767, int(r * gain)))
+                                out[i*8+4:i*8+6] = l.to_bytes(2, 'little', signed=True)
+                                out[i*8+6:i*8+8] = r.to_bytes(2, 'little', signed=True)
                             self._usb_audio_stream.write(bytes(out))
                         else:
-                            # 2ch: just write stereo directly
-                            self._usb_audio_stream.write(bytes(raw_s16))
+                            out = bytearray(n_samples * 4)
+                            for i in range(n_samples):
+                                l = int.from_bytes(raw_s16[i*4:i*4+2], 'little', signed=True)
+                                r = int.from_bytes(raw_s16[i*4+2:i*4+4], 'little', signed=True)
+                                l = max(-32768, min(32767, int(l * gain)))
+                                r = max(-32768, min(32767, int(r * gain)))
+                                out[i*4:i*4+2] = l.to_bytes(2, 'little', signed=True)
+                                out[i*4+2:i*4+4] = r.to_bytes(2, 'little', signed=True)
+                            self._usb_audio_stream.write(bytes(out))
                         self.haptic_count += 1
                     except Exception as e:
                         self.log(f'USB write error: {e}')
@@ -882,11 +897,12 @@ class DS5ClientGUI:
         haptic_frame.pack(fill='x', pady=(0, 8))
 
         ttk.Label(haptic_frame, text='Gain:').grid(row=0, column=0, sticky='w', padx=(0, 8))
-        self.gain_var = tk.IntVar(value=self.client.config.get('haptic_gain', 4))
-        self.gain_slider = tk.Scale(haptic_frame, from_=1, to=32, orient='horizontal',
-                                     variable=self.gain_var, command=self._update_gain, length=250)
+        self.gain_var = tk.DoubleVar(value=self.client.config.get('haptic_gain', 2.0))
+        self.gain_slider = tk.Scale(haptic_frame, from_=0.5, to=8.0, resolution=0.1,
+                                     orient='horizontal', variable=self.gain_var,
+                                     command=self._update_gain, length=250)
         self.gain_slider.grid(row=0, column=1, sticky='w')
-        self.lbl_gain = ttk.Label(haptic_frame, text=f'x{self.gain_var.get()}')
+        self.lbl_gain = ttk.Label(haptic_frame, text=f'x{self.gain_var.get():.1f}')
         self.lbl_gain.grid(row=0, column=2, padx=(8, 0))
 
         ttk.Label(haptic_frame, text='Mode:').grid(row=1, column=0, sticky='w', padx=(0, 8), pady=(4, 0))
@@ -1116,9 +1132,9 @@ class DS5ClientGUI:
         save_config(self.client.config)
 
     def _update_gain(self, val):
-        g = int(val)
+        g = float(val)
         self.client.config['haptic_gain'] = g
-        self.lbl_gain.config(text=f'x{g}')
+        self.lbl_gain.config(text=f'x{g:.1f}')
         save_config(self.client.config)
 
     def _save_debug(self, key, val):
