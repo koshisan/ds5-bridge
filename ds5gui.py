@@ -275,8 +275,9 @@ class DS5Server:
             import win32com.client
             wmi = win32com.client.GetObject("winmgmts:" + chr(92)*2 + "." + chr(92) + "root" + chr(92) + "cimv2")
             # WQL LIKE needs backslashes doubled
-            escaped = hwid.replace("\\", "\\\\")
-            for dev in wmi.ExecQuery(f'SELECT * FROM Win32_PnPEntity WHERE PNPDeviceID LIKE "%{escaped}%"'):
+            pattern = hwid.replace(chr(92), chr(37)).replace(chr(38), chr(37))
+            query = 'SELECT PNPDeviceID, Name, Status FROM Win32_PnPEntity WHERE PNPDeviceID LIKE ' + chr(34) + pattern + chr(37) + chr(34)
+            for dev in wmi.ExecQuery(query):
                 return dev.PNPDeviceID, dev.Name or '-', dev.Status or 'Unknown'
         except Exception as e:
             print(f"[WMI] Query error: {e}")
@@ -626,7 +627,8 @@ class DS5GUI:
         iid, name, status = info
         version = '-'
         try:
-            wmi_obj = self.server._wmi()
+            import win32com.client
+            wmi_obj = win32com.client.GetObject("winmgmts:" + chr(92)*2 + "." + chr(92) + "root" + chr(92) + "cimv2")
             escaped = iid.replace(chr(92), "%")
             query = f"SELECT DriverVersion FROM Win32_PnPSignedDriver WHERE DeviceID LIKE '{escaped}'"
             results = wmi_obj.query(query) if hasattr(wmi_obj, 'query') else wmi_obj.ExecQuery(query)
