@@ -32,6 +32,8 @@ CONFIG_FILE = CONFIG_DIR / 'client_config.json'
 DEFAULT_CONFIG = {
     'server_host': '192.168.81.88',
     'server_port': 5555,
+    'client_port': 0,  # 0 = random ephemeral port
+    'protocol': 'udp',  # udp or tcp
     'autostart': False,
 }
 
@@ -136,6 +138,9 @@ class DS5Client:
         self.connected = False
         self.running = False
         self.sock = None
+        self._is_tcp = False
+        self.server_alive = False
+        self._last_server_rx = 0
 
         # Stats
         self.packets_sent = 0
@@ -189,11 +194,30 @@ class DS5Client:
 
         host = self.config['server_host']
         port = self.config['server_port']
+        client_port = self.config.get('client_port', 0)
+        proto = self.config.get('protocol', 'udp')
 
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind(('0.0.0.0', 0))
+        if proto == 'tcp':
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.settimeout(3.0)
+            try:
+                self.sock.connect((host, port))
+            except Exception as e:
+                self.log(f'TCP connect failed: {e}')
+                self.sock.close()
+                self.sock = None
+                return
+            self.sock.settimeout(None)
+            self._is_tcp = True
+        else:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.sock.bind(('0.0.0.0', client_port))
+            self._is_tcp = False
+
         self.target = (host, port)
         self.running = True
+        self.server_alive = False
+        self._last_server_rx = 0
         self.packets_sent = 0
         self.packets_recv = 0
         self.features_handled = 0
@@ -247,7 +271,10 @@ class DS5Client:
                 copy_len = min(len(src), USB_REPORT_SIZE - 1)
                 report[1:1 + copy_len] = src[:copy_len]
 
-                self.sock.sendto(bytes(report), self.target)
+                if self._is_tcp:
+                    self.sock.sendall(bytes(report))
+                else:
+                    self.sock.sendto(bytes(report), self.target)
                 self.packets_sent += 1
 
                 # Rate calculation
@@ -270,9 +297,17 @@ class DS5Client:
         while self.running:
             try:
                 self.sock.settimeout(1.0)
-                data, addr = self.sock.recvfrom(512)
+                if self._is_tcp:
+                    data = self.sock.recv(512)
+                    if not data:
+                        self.log('TCP connection closed by server')
+                        break
+                else:
+                    data, addr = self.sock.recvfrom(512)
                 if len(data) < 2:
                     continue
+                self.server_alive = True
+                self._last_server_rx = time.monotonic()
 
                 # Feature GET request
                 if data[0] == 0x03:
@@ -322,7 +357,10 @@ class DS5Client:
             response = self.dev.get_feature_report(report_id, 256)
             if response:
                 pkt = bytes([0x04, report_id]) + bytes(response)
-                self.sock.sendto(pkt, self.target)
+                if self._is_tcp:
+                    self.sock.sendall(pkt)
+                else:
+                    self.sock.sendto(pkt, self.target)
                 self.features_handled += 1
         except Exception as e:
             self.log(f'Feature GET 0x{report_id:02X} error: {e}')
@@ -475,6 +513,23 @@ class DS5ClientGUI:
         ttk.Button(cfg_frame, text='Save', width=8, command=self._save_config).grid(
             row=0, column=4, padx=(16, 0))
 
+        # Client settings
+        client_frame = ttk.LabelFrame(tab_config, text='Client', padding=8)
+        client_frame.pack(fill='x', pady=(0, 8))
+
+        ttk.Label(client_frame, text='Local Port:').grid(row=0, column=0, sticky='w', padx=(0, 8))
+        self.entry_client_port = ttk.Entry(client_frame, width=8)
+        self.entry_client_port.insert(0, str(self.client.config.get('client_port', 0)))
+        self.entry_client_port.grid(row=0, column=1, sticky='w')
+        ttk.Label(client_frame, text='(0 = random)', foreground='gray').grid(row=0, column=2, sticky='w', padx=(8, 0))
+
+        ttk.Label(client_frame, text='Protocol:').grid(row=1, column=0, sticky='w', padx=(0, 8), pady=(4, 0))
+        self.proto_var = tk.StringVar(value=self.client.config.get('protocol', 'udp'))
+        proto_frame = ttk.Frame(client_frame)
+        proto_frame.grid(row=1, column=1, columnspan=2, sticky='w', pady=(4, 0))
+        ttk.Radiobutton(proto_frame, text='UDP', variable=self.proto_var, value='udp').pack(side='left', padx=(0, 12))
+        ttk.Radiobutton(proto_frame, text='TCP', variable=self.proto_var, value='tcp').pack(side='left')
+
         # Autostart
         opt_frame = ttk.LabelFrame(tab_config, text='Options', padding=8)
         opt_frame.pack(fill='x', pady=(0, 8))
@@ -519,7 +574,15 @@ class DS5ClientGUI:
         if self.client.running:
             host = self.client.config['server_host']
             port = self.client.config['server_port']
-            self.lbl_server.config(text=f'Connected to {host}:{port}', foreground='green')
+            proto = self.client.config.get('protocol', 'udp').upper()
+            if self.client.server_alive:
+                idle = time.monotonic() - self.client._last_server_rx
+                if idle < 5.0:
+                    self.lbl_server.config(text=f'{proto} {host}:{port} - Server active', foreground='green')
+                else:
+                    self.lbl_server.config(text=f'{proto} {host}:{port} - Server idle ({idle:.0f}s)', foreground='orange')
+            else:
+                self.lbl_server.config(text=f'{proto} {host}:{port} - Waiting for server...', foreground='#cc8800')
             self.lbl_stats.config(
                 text=f'TX: {self.client.packets_sent}  |  RX: {self.client.packets_recv}  |  '
                      f'Features: {self.client.features_handled}  |  {self.client.send_rate:.0f} pkt/s')
@@ -585,8 +648,13 @@ class DS5ClientGUI:
             self.client.config['server_port'] = int(self.entry_port.get().strip())
         except ValueError:
             pass
+        try:
+            self.client.config['client_port'] = int(self.entry_client_port.get().strip())
+        except ValueError:
+            pass
+        self.client.config['protocol'] = self.proto_var.get()
         save_config(self.client.config)
-        self.client.log('Config saved')
+        self.client.log('Config saved (restart bridge to apply)')
 
     def _toggle_autostart(self):
         enabled = self.autostart_var.get()
