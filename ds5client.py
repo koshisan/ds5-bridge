@@ -519,55 +519,155 @@ class DS5Client:
             self.log(f'Feature SET 0x{report_id:02X} error: {e}')
 
     _haptic_seq = 0
+    _haptic_sender_running = False
+    _haptic_s16_buffer = None  # raw s16 samples from server
+    _haptic_lock = None
+
+    def _start_haptic_sender(self):
+        if self._haptic_sender_running:
+            return
+        import numpy as np
+        from scipy.signal import resample as sp_resample
+        self._np = np
+        self._sp_resample = sp_resample
+        self._haptic_sender_running = True
+        self._haptic_s16_buffer = bytearray()
+        self._haptic_lock = threading.Lock()
+        t = threading.Thread(target=self._haptic_send_loop, daemon=True)
+        t.start()
+        self.log('Haptic sender started (SAxense-style 10.67ms timer)')
+
+    def _haptic_send_loop(self):
+        """SAxense-style: timer fires every 10.67ms, consume exactly enough s16 samples, resample, send."""
+        np = self._np
+        sp_resample = self._sp_resample
+
+        INTERVAL_NS = 10_666_666  # 10.67ms in nanoseconds
+        REPORT_ID = 0x32
+        PAYLOAD_SIZE = 136
+        OUTPUT_SAMPLES = 32  # stereo pairs per report
+        # How many s16 stereo samples @ 48kHz correspond to 10.67ms?
+        INPUT_SAMPLES_PER_TICK = int(48000 * INTERVAL_NS / 1_000_000_000)  # = 512
+        INPUT_BYTES_PER_TICK = INPUT_SAMPLES_PER_TICK * 4  # s16 stereo = 4 bytes per sample
+
+        next_ns = time.monotonic_ns()
+
+        while self.running and self._haptic_sender_running:
+            # Wait for next tick
+            next_ns += INTERVAL_NS
+            now = time.monotonic_ns()
+            wait = next_ns - now
+            if wait > 2_000_000:  # >2ms: sleep
+                time.sleep((wait - 1_000_000) / 1_000_000_000)
+            # Spin for precision
+            while time.monotonic_ns() < next_ns:
+                pass
+            # Prevent drift accumulation
+            if time.monotonic_ns() - next_ns > 100_000_000:
+                next_ns = time.monotonic_ns()
+
+            # Consume samples
+            with self._haptic_lock:
+                if len(self._haptic_s16_buffer) >= INPUT_BYTES_PER_TICK:
+                    chunk = bytes(self._haptic_s16_buffer[:INPUT_BYTES_PER_TICK])
+                    del self._haptic_s16_buffer[:INPUT_BYTES_PER_TICK]
+                elif len(self._haptic_s16_buffer) >= 4:
+                    # Take what we have
+                    chunk = bytes(self._haptic_s16_buffer)
+                    self._haptic_s16_buffer.clear()
+                else:
+                    continue
+
+            # Unpack s16 stereo
+            n = len(chunk) // 4
+            left = np.zeros(n, dtype=np.float64)
+            right = np.zeros(n, dtype=np.float64)
+            for i in range(n):
+                l, r = struct.unpack_from('<hh', chunk, i * 4)
+                left[i] = l
+                right[i] = r
+
+            # Resample to 32 samples (one report's worth)
+            left_ds = sp_resample(left, OUTPUT_SAMPLES)
+            right_ds = sp_resample(right, OUTPUT_SAMPLES)
+
+            # s16 -> u8
+            audio_data = bytearray(64)
+            for i in range(OUTPUT_SAMPLES):
+                l_s16 = int(np.clip(left_ds[i], -32768, 32767))
+                r_s16 = int(np.clip(right_ds[i], -32768, 32767))
+                audio_data[i*2] = ((l_s16 >> 8) + 128) & 0xFF
+                audio_data[i*2+1] = ((r_s16 >> 8) + 128) & 0xFF
+
+            # Waveform + peak
+            self.haptic_waveform = list(audio_data)
+            peak = max(abs(b - 128) for b in audio_data) / 128.0
+            self.haptic_peak = peak
+            self.haptic_count += 1
+            mono_now = time.monotonic()
+            if peak >= self.haptic_peak_hold:
+                self.haptic_peak_hold = peak
+                self._haptic_peak_time = mono_now
+            elif mono_now - self._haptic_peak_time > 1.5:
+                self.haptic_peak_hold = max(self.haptic_peak_hold - 0.01, peak)
+
+            # Build and send Report 0x32
+            seq = self._haptic_seq
+            pkt_0x11 = bytes([
+                (0x11 & 0x3F) | (1 << 7), 7,
+                0b11111110, 0, 0, 0, 0, seq & 0xFF, 0
+            ])
+            pkt_0x12_header = bytes([(0x12 & 0x3F) | (1 << 7), 64])
+            packets = pkt_0x11 + pkt_0x12_header + bytes(audio_data)
+            payload = packets.ljust(PAYLOAD_SIZE, b'\x00')
+            tag_seq = (seq & 0x0F) << 4
+            report_body = bytes([tag_seq]) + payload
+            crc = ds5_bt_crc32(bytes([REPORT_ID]) + report_body)
+            report = bytes([REPORT_ID]) + report_body + struct.pack('<I', crc)
+            self.dev.write(report)
+            self._haptic_seq = (seq + 1) & 0x0F
 
     def _handle_haptic(self, data):
         if not self.is_bt:
             return
 
-        # 0x40: raw s16 stream - take raw bytes directly (no resampling)
-        # 0x32: legacy u8 format
         if data[0] == 0x40:
-            audio_samples = data[2:66]  # first 64 bytes of raw s16 payload
-        else:
-            audio_samples = data[2:66]
+            # Raw s16 stream - accumulate in buffer
+            if not self._haptic_sender_running:
+                self._start_haptic_sender()
+            raw = data[2:]
+            with self._haptic_lock:
+                self._haptic_s16_buffer.extend(raw)
+                # Cap at ~0.5s of 48kHz stereo
+                max_buf = 48000 * 4  # 0.5s
+                if len(self._haptic_s16_buffer) > max_buf:
+                    del self._haptic_s16_buffer[:len(self._haptic_s16_buffer) - max_buf]
 
-        if len(audio_samples) < 64:
-            audio_samples = audio_samples + bytes(64 - len(audio_samples))
+        elif data[0] == 0x32:
+            # Legacy u8 - send directly
+            audio = data[2:66]
+            if len(audio) < 64:
+                audio = audio + bytes(64 - len(audio))
+            self.haptic_waveform = list(audio[:64])
+            peak = max(abs(b - 128) for b in audio) / 128.0
+            self.haptic_peak = peak
+            self.haptic_count += 1
 
-        # Waveform capture
-        self.haptic_waveform = list(audio_samples[:64])
-
-        # Peak measurement (u8: 128=center, 0/255=max)
-        peak = max(abs(b - 128) for b in audio_samples) / 128.0
-        self.haptic_peak = peak
-        self.haptic_count += 1
-        now = time.monotonic()
-        if peak >= self.haptic_peak_hold:
-            self.haptic_peak_hold = peak
-            self._haptic_peak_time = now
-        elif now - self._haptic_peak_time > 1.5:
-            self.haptic_peak_hold = max(self.haptic_peak_hold - 0.01, peak)
-
-        seq = self._haptic_seq
-        REPORT_ID = 0x32
-        payload_size = 136
-
-        pkt_0x11 = bytes([
-            (0x11 & 0x3F) | (1 << 7), 7,
-            0b11111110, 0, 0, 0, 0, seq & 0xFF, 0
-        ])
-        pkt_0x12_header = bytes([
-            (0x12 & 0x3F) | (1 << 7), 64,
-        ])
-        packets = pkt_0x11 + pkt_0x12_header + bytes(audio_samples)
-        payload = packets.ljust(payload_size, b'\x00')
-        tag_seq = (seq & 0x0F) << 4
-        report_body = bytes([tag_seq]) + payload
-        crc_data = bytes([REPORT_ID]) + report_body
-        crc = ds5_bt_crc32(crc_data)
-        report = bytes([REPORT_ID]) + report_body + struct.pack('<I', crc)
-        self.dev.write(report)
-        self._haptic_seq = (seq + 1) & 0x0F
+            seq = self._haptic_seq
+            REPORT_ID = 0x32
+            pkt_0x11 = bytes([
+                (0x11 & 0x3F) | (1 << 7), 7,
+                0b11111110, 0, 0, 0, 0, seq & 0xFF, 0
+            ])
+            pkt_0x12_header = bytes([(0x12 & 0x3F) | (1 << 7), 64])
+            packets = pkt_0x11 + pkt_0x12_header + bytes(audio)
+            payload = packets.ljust(136, b'\x00')
+            tag_seq = (seq & 0x0F) << 4
+            report_body = bytes([tag_seq]) + payload
+            crc = ds5_bt_crc32(bytes([REPORT_ID]) + report_body)
+            report = bytes([REPORT_ID]) + report_body + struct.pack('<I', crc)
+            self.dev.write(report)
+            self._haptic_seq = (seq + 1) & 0x0F
 
 
 class DS5ClientGUI:
