@@ -270,19 +270,27 @@ class DS5Server:
 
     # --- Driver Management (WMI) ---
     def _wmi_find_device(self, hwid):
-        """Find PnP device by hardware ID via WMI. Returns (instance_id, name, status) or None."""
+        """Find PnP device by hardware ID. Returns (instance_id, name, status) or None."""
         try:
-            import win32com.client
-            wmi = win32com.client.GetObject("winmgmts:" + chr(92)*2 + "." + chr(92) + "root" + chr(92) + "cimv2")
-            print(f"[WMI] GetObject OK")
-            # WQL LIKE needs backslashes doubled
-            pattern = hwid.replace(chr(92), chr(37)).replace(chr(38), chr(37))
-            query = 'SELECT PNPDeviceID, Name, Status FROM Win32_PnPEntity WHERE PNPDeviceID LIKE ' + chr(39) + pattern + chr(37) + chr(39)
-            print(f"[WMI] QUERY: {query}")
-            for dev in wmi.ExecQuery(query):
-                return dev.PNPDeviceID, dev.Name or '-', dev.Status or 'Unknown'
+            r = subprocess.run(
+                ['wmic', 'path', 'Win32_PnPEntity', 'get', 'PNPDeviceID,Name,Status', '/format:csv'],
+                capture_output=True, text=True, errors='replace', timeout=8,
+                creationflags=0x08000000)
+            hwid_upper = hwid.upper()
+            for line in r.stdout.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split(',')
+                # CSV format: Node,Name,PNPDeviceID,Status
+                if len(parts) >= 4:
+                    pnp_id = parts[-2]
+                    if pnp_id.upper().startswith(hwid_upper):
+                        name = ','.join(parts[1:-2])  # Name might contain commas
+                        status = parts[-1]
+                        return pnp_id, name, status
         except Exception as e:
-            print(f"[WMI] Query error: {e}")
+            print(f"[DEV] find error: {e}")
         return None
 
     def is_driver_enabled(self, hwid):
@@ -629,15 +637,15 @@ class DS5GUI:
         iid, name, status = info
         version = '-'
         try:
-            import win32com.client
-            wmi_obj = win32com.client.GetObject("winmgmts:" + chr(92)*2 + "." + chr(92) + "root" + chr(92) + "cimv2")
-            escaped = iid.replace(chr(92), "%")
-            query = f"SELECT DriverVersion FROM Win32_PnPSignedDriver WHERE DeviceID LIKE '{escaped}'"
-            results = wmi_obj.query(query) if hasattr(wmi_obj, 'query') else wmi_obj.ExecQuery(query)
-            for drv in results:
-                v = drv.DriverVersion if hasattr(drv, 'DriverVersion') else None
-                if v:
-                    version = str(v)
+            r = subprocess.run(
+                ['wmic', 'path', 'Win32_PnPSignedDriver', 'get', 'DeviceID,DriverVersion', '/format:csv'],
+                capture_output=True, text=True, errors='replace', timeout=8,
+                creationflags=0x08000000)
+            for line in r.stdout.splitlines():
+                parts = line.strip().split(',')
+                if len(parts) >= 3 and iid.upper() in parts[1].upper():
+                    if parts[2]:
+                        version = parts[2]
                     break
         except Exception:
             pass
