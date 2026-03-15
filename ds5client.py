@@ -367,14 +367,10 @@ class DS5Client:
         """Disconnect from DS5."""
         if self._usb_audio_stream:
             try:
-                self._usb_audio_stream.stop_stream()
+                self._usb_audio_stream.stop()
                 self._usb_audio_stream.close()
             except: pass
             self._usb_audio_stream = None
-        if self._usb_audio_pa:
-            try: self._usb_audio_pa.terminate()
-            except: pass
-            self._usb_audio_pa = None
         self.stop()
         if self.dev:
             try: self.dev.close()
@@ -692,34 +688,28 @@ class DS5Client:
     _usb_audio_pa = None
 
     def _start_usb_audio(self):
-        """Open USB audio output stream to DS5 speaker."""
+        """Open USB audio output stream to DS5 speaker via sounddevice."""
         if self._usb_audio_stream:
             return True
         try:
-            import pyaudiowpatch as pyaudio
-            self._usb_audio_pa = pyaudio.PyAudio()
-            # Find DS5 USB speaker (output, not loopback)
-            ds5_out = None
-            for i in range(self._usb_audio_pa.get_device_count()):
-                info = self._usb_audio_pa.get_device_info_by_index(i)
-                name = info.get('name', '')
-                if ('DualSense' in name or 'Wireless Controller' in name) and info['maxOutputChannels'] >= 2 and not info.get('isLoopbackDevice'):
-                    ds5_out = info
+            import sounddevice as sd
+            self._sd = sd
+            # Find DS5 USB speaker
+            ds5_idx = None
+            for i, d in enumerate(sd.query_devices()):
+                if ('DualSense' in d['name'] or 'Wireless Controller' in d['name']) and d['max_output_channels'] >= 2:
+                    ds5_idx = i
+                    channels = min(d['max_output_channels'], 4)
                     break
-            if not ds5_out:
+            if ds5_idx is None:
                 self.log('USB: DS5 speaker not found')
                 return False
-            # Open 4ch/48kHz/S16 to match DS5 USB format
-            channels = min(int(ds5_out['maxOutputChannels']), 4)
-            self._usb_audio_stream = self._usb_audio_pa.open(
-                format=pyaudio.paInt16,
-                channels=channels,
-                rate=48000,
-                output=True,
-                output_device_index=ds5_out['index'],
-                frames_per_buffer=256)
+            self._usb_audio_stream = sd.OutputStream(
+                device=ds5_idx, channels=channels, samplerate=48000, dtype='int16',
+                blocksize=256)
+            self._usb_audio_stream.start()
             self._usb_channels = channels
-            self.log(f'USB: Opened DS5 speaker ({ds5_out["name"]}, {channels}ch, 48kHz)')
+            self.log(f'USB: Opened DS5 speaker (sounddevice, {channels}ch, 48kHz)')
             return True
         except Exception as e:
             self.log(f'USB audio error: {e}')
@@ -749,26 +739,18 @@ class DS5Client:
                     try:
                         gain = self.config.get('haptic_gain', 2.0)
                         n_samples = len(raw_s16) // 4
+                        import numpy as np
+                        # Unpack stereo s16
+                        stereo = np.frombuffer(raw_s16[:n_samples*4], dtype=np.int16).reshape(-1, 2)
+                        if gain != 1.0:
+                            stereo = np.clip(stereo.astype(np.float64) * gain, -32768, 32767).astype(np.int16)
                         if self._usb_channels == 4:
-                            out = bytearray(n_samples * 8)
-                            for i in range(n_samples):
-                                l = int.from_bytes(raw_s16[i*4:i*4+2], 'little', signed=True)
-                                r = int.from_bytes(raw_s16[i*4+2:i*4+4], 'little', signed=True)
-                                l = max(-32768, min(32767, int(l * gain)))
-                                r = max(-32768, min(32767, int(r * gain)))
-                                out[i*8+4:i*8+6] = l.to_bytes(2, 'little', signed=True)
-                                out[i*8+6:i*8+8] = r.to_bytes(2, 'little', signed=True)
-                            self._usb_audio_stream.write(bytes(out))
+                            out = np.zeros((n_samples, 4), dtype=np.int16)
+                            out[:, 2] = stereo[:, 0]  # haptic L
+                            out[:, 3] = stereo[:, 1]  # haptic R
                         else:
-                            out = bytearray(n_samples * 4)
-                            for i in range(n_samples):
-                                l = int.from_bytes(raw_s16[i*4:i*4+2], 'little', signed=True)
-                                r = int.from_bytes(raw_s16[i*4+2:i*4+4], 'little', signed=True)
-                                l = max(-32768, min(32767, int(l * gain)))
-                                r = max(-32768, min(32767, int(r * gain)))
-                                out[i*4:i*4+2] = l.to_bytes(2, 'little', signed=True)
-                                out[i*4+2:i*4+4] = r.to_bytes(2, 'little', signed=True)
-                            self._usb_audio_stream.write(bytes(out))
+                            out = stereo
+                        self._usb_audio_stream.write(out)
                         self.haptic_count += 1
                     except Exception as e:
                         self.log(f'USB write error: {e}')
