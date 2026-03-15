@@ -614,8 +614,8 @@ class DS5Client:
             l_s16 = int(np.clip(left_ds[i], -32768, 32767))
             r_s16 = int(np.clip(right_ds[i], -32768, 32767))
             import numpy as np
-            l_out = int(np.clip((l_s16 * gain) >> 8, -128, 127)) + 128
-            r_out = int(np.clip((r_s16 * gain) >> 8, -128, 127)) + 128
+            l_out = int(np.clip(int(l_s16 * gain) >> 8, -128, 127)) + 128
+            r_out = int(np.clip(int(r_s16 * gain) >> 8, -128, 127)) + 128
             audio[i*2] = l_out & 0xFF
             audio[i*2+1] = r_out & 0xFF
         return audio
