@@ -274,11 +274,13 @@ class DS5Server:
         try:
             import win32com.client
             wmi = win32com.client.GetObject("winmgmts:\\\\.\\root\\cimv2")
+oot\cimv2")
+            # WQL LIKE needs backslashes doubled
             escaped = hwid.replace("\\", "\\\\")
             for dev in wmi.ExecQuery(f'SELECT * FROM Win32_PnPEntity WHERE PNPDeviceID LIKE "%{escaped}%"'):
                 return dev.PNPDeviceID, dev.Name or '-', dev.Status or 'Unknown'
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[WMI] Query error: {e}")
         return None
 
     def is_driver_enabled(self, hwid):
