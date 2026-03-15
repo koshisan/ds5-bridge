@@ -517,18 +517,23 @@ class DS5Client:
         try:
             response = self.dev.get_feature_report(report_id, 256)
             if response:
-                pkt = bytes([0x04, report_id]) + bytes(response)
+                resp_bytes = bytes(response)
+                self.log(f'Feature GET 0x{report_id:02X}: {len(resp_bytes)}B [{resp_bytes[:8].hex(" ")}...]')
+                pkt = bytes([0x04, report_id]) + resp_bytes
                 if self._is_tcp and self._tcp_sock:
                     self._tcp_sock.sendall(pkt)
                 else:
                     self.sock.sendto(pkt, self.target)
                 self.features_handled += 1
+            else:
+                self.log(f'Feature GET 0x{report_id:02X}: empty response')
         except Exception as e:
             self.log(f'Feature GET 0x{report_id:02X} error: {e}')
 
     def _handle_feature_set(self, data):
         report_id = data[1]
         try:
+            self.log(f'Feature SET 0x{report_id:02X}: {len(data)}B [{data[:8].hex(" ")}...]')
             if self.is_bt:
                 buf = bytearray(64)
                 buf[0] = report_id
