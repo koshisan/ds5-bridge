@@ -905,20 +905,24 @@ class DS5ClientGUI:
             h = cv.winfo_height() or 60
             mid = h // 2
             cv.create_line(0, mid, w, mid, fill='#333333')
-            # Draw L channel (even bytes) and R channel (odd bytes)
+            # Draw L channel (even bytes) and R channel (odd bytes) - auto-scaled
             n = len(wf) // 2
+            centered = [wf[i] - 128 for i in range(len(wf))]
+            max_val = max(abs(v) for v in centered) if centered else 1
+            if max_val < 1:
+                max_val = 1
             pts_l = []
             pts_r = []
             for i in range(n):
                 x = int(i * w / n)
-                yl = mid - int(((wf[i*2] - 128) / 128.0) * mid * 0.9)
-                yr = mid - int(((wf[i*2+1] - 128) / 128.0) * mid * 0.9)
+                yl = mid - int((centered[i*2] / max_val) * mid * 0.85)
+                yr = mid - int((centered[i*2+1] / max_val) * mid * 0.85)
                 pts_l.append((x, yl))
                 pts_r.append((x, yr))
             if len(pts_l) >= 2:
                 cv.create_line(*[c for p in pts_l for c in p], fill='#66aaff', width=1)
                 cv.create_line(*[c for p in pts_r for c in p], fill='#33cc66', width=1)
-                cv.create_text(w - 4, 4, anchor='ne', text='L/R u8', fill='#555555', font=('Consolas', 7))
+                cv.create_text(w - 4, 4, anchor='ne', text=f'u8 +/-{max_val}', fill='#555555', font=('Consolas', 7))
 
         self.root.after(50, self._update_loop)
 
