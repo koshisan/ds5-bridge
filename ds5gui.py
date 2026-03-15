@@ -273,8 +273,7 @@ class DS5Server:
         """Find PnP device by hardware ID via WMI. Returns (instance_id, name, status) or None."""
         try:
             import win32com.client
-            wmi = win32com.client.GetObject("winmgmts:\\\\.\\root\\cimv2")
-oot\cimv2")
+            wmi = win32com.client.GetObject("winmgmts:" + chr(92)*2 + "." + chr(92) + "root" + chr(92) + "cimv2")
             # WQL LIKE needs backslashes doubled
             escaped = hwid.replace("\\", "\\\\")
             for dev in wmi.ExecQuery(f'SELECT * FROM Win32_PnPEntity WHERE PNPDeviceID LIKE "%{escaped}%"'):
@@ -628,7 +627,7 @@ class DS5GUI:
         version = '-'
         try:
             import win32com.client
-            wmi_obj = win32com.client.GetObject("winmgmts:\\\\.\\root\\cimv2")
+            wmi_obj = win32com.client.GetObject("winmgmts:" + chr(92)*2 + "." + chr(92) + "root" + chr(92) + "cimv2")
             escaped = iid.replace("\\", "\\\\")
             for drv in wmi_obj.ExecQuery(f'SELECT DriverVersion FROM Win32_PnPSignedDriver WHERE DeviceID = "{escaped}"'):
                 if drv.DriverVersion:
