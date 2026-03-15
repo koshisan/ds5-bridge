@@ -626,12 +626,14 @@ class DS5GUI:
         iid, name, status = info
         version = '-'
         try:
-            import win32com.client
-            wmi_obj = win32com.client.GetObject("winmgmts:")
-            escaped = iid.replace("\\", "\\\\")
-            for drv in wmi_obj.ExecQuery(f'SELECT DriverVersion FROM Win32_PnPSignedDriver WHERE DeviceID = "{escaped}"'):
-                if drv.DriverVersion:
-                    version = drv.DriverVersion
+            wmi_obj = self.server._wmi()
+            escaped = iid.replace(chr(92), "%")
+            query = f"SELECT DriverVersion FROM Win32_PnPSignedDriver WHERE DeviceID LIKE '{escaped}'"
+            results = wmi_obj.query(query) if hasattr(wmi_obj, 'query') else wmi_obj.ExecQuery(query)
+            for drv in results:
+                v = drv.DriverVersion if hasattr(drv, 'DriverVersion') else None
+                if v:
+                    version = str(v)
                     break
         except Exception:
             pass
