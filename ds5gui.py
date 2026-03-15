@@ -268,37 +268,35 @@ class DS5Server:
                     self._handoff_status = f'active, idle {idle_s:.0f}s / {timeout}s'
             time.sleep(1)
 
-    # --- Driver Management ---
-    def _get_instance_id(self, hwid):
+    # --- Driver Management (WMI) ---
+    def _wmi_find_device(self, hwid):
+        """Find PnP device by hardware ID via WMI. Returns (instance_id, name, status) or None."""
         try:
-            result = subprocess.run(
-                ['powershell', '-Command',
-                 f'Get-PnpDevice | Where-Object {{ $_.HardwareID -contains "{hwid}" }} | Select-Object -ExpandProperty InstanceId'],
-                capture_output=True, text=True, errors='replace', timeout=5)
-            return result.stdout.strip()
-        except:
-            return None
+            import win32com.client
+            wmi = win32com.client.GetObject("winmgmts:\\\\.\\root\\cimv2")
+            escaped = hwid.replace("\\", "\\\\")
+            for dev in wmi.ExecQuery(f'SELECT * FROM Win32_PnPEntity WHERE PNPDeviceID LIKE "%{escaped}%"'):
+                return dev.PNPDeviceID, dev.Name or '-', dev.Status or 'Unknown'
+        except Exception:
+            pass
+        return None
 
     def is_driver_enabled(self, hwid):
-        try:
-            result = subprocess.run(
-                ['powershell', '-Command',
-                 f'Get-PnpDevice | Where-Object {{ $_.HardwareID -contains "{hwid}" }} | Select-Object -ExpandProperty Status'],
-                capture_output=True, text=True, errors='replace', timeout=5)
-            return result.stdout.strip() == 'OK'
-        except:
-            return False
+        info = self._wmi_find_device(hwid)
+        return info is not None and info[2] == 'OK'
 
     def enable_driver(self, hwid):
-        iid = self._get_instance_id(hwid)
-        if iid:
+        info = self._wmi_find_device(hwid)
+        if info:
+            iid = info[0]
             r = subprocess.run(f'pnputil /enable-device "{iid}"', capture_output=True, text=True, errors='replace', shell=True)
             return r.returncode == 0, r.stdout + r.stderr
         return False, "Not found"
 
     def disable_driver(self, hwid):
-        iid = self._get_instance_id(hwid)
-        if iid:
+        info = self._wmi_find_device(hwid)
+        if info:
+            iid = info[0]
             r = subprocess.run(f'pnputil /disable-device "{iid}"', capture_output=True, text=True, errors='replace', shell=True)
             return r.returncode == 0, r.stdout + r.stderr
         return False, "Not found"
@@ -620,43 +618,23 @@ class DS5GUI:
         save_config(self.server.config)
 
     def _get_driver_details(self, hwid):
-        """Get driver name, version, date via PowerShell."""
+        """Get driver status via WMI."""
+        info = self.server._wmi_find_device(hwid)
+        if not info:
+            return 'Not installed', '-', '-', '-'
+        iid, name, status = info
+        version = '-'
         try:
-            result = subprocess.run(
-                ['powershell', '-Command',
-                 f'Get-PnpDevice | Where-Object {{ $_.HardwareID -contains "{hwid}" }} | Select-Object Status, FriendlyName, InstanceId | ConvertTo-Json'],
-                capture_output=True, text=True, errors='replace', timeout=8)
-            info = json.loads(result.stdout) if result.stdout.strip() else {}
-            name = info.get('FriendlyName', '?')
-            status = info.get('Status', '?')
-            iid = info.get('InstanceId', '')
-
-            # Get driver version + date
-            ver_result = subprocess.run(
-                ['powershell', '-Command',
-                 f'Get-PnpDeviceProperty -InstanceId "{iid}" -KeyName DEVPKEY_Device_DriverVersion, DEVPKEY_Device_DriverDate 2>$null | Select-Object KeyName, Data | ConvertTo-Json'],
-                capture_output=True, text=True, errors='replace', timeout=8)
-            props = json.loads(ver_result.stdout) if ver_result.stdout.strip() else []
-            if not isinstance(props, list):
-                props = [props]
-            version = '?'
-            date = '?'
-            for p in props:
-                if 'DriverVersion' in p.get('KeyName', ''):
-                    version = p.get('Data', '?')
-                if 'DriverDate' in p.get('KeyName', ''):
-                    d = str(p.get('Data', ''))
-                    if '/Date(' in d:
-                        import re
-                        m = re.search(r'/Date\((\d+)', d)
-                        if m:
-                            from datetime import datetime
-                            date = datetime.fromtimestamp(int(m.group(1)) / 1000).strftime('%Y-%m-%d')
-                    elif d:
-                        date = d[:10]
-            return status, name, version, date
+            import win32com.client
+            wmi_obj = win32com.client.GetObject("winmgmts:\\\\.\\root\\cimv2")
+            escaped = iid.replace("\\", "\\\\")
+            for drv in wmi_obj.ExecQuery(f'SELECT DriverVersion FROM Win32_PnPSignedDriver WHERE DeviceID = "{escaped}"'):
+                if drv.DriverVersion:
+                    version = drv.DriverVersion
+                    break
         except Exception:
-            return '?', '?', '?', '?'
+            pass
+        return status, name, version, '-'
 
     def _refresh_drivers(self):
         def do():
