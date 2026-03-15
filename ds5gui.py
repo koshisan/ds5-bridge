@@ -278,8 +278,8 @@ class DS5Server:
             # WQL LIKE needs backslashes doubled
             pattern = hwid.replace(chr(92), chr(37)).replace(chr(38), chr(37))
             query = 'SELECT PNPDeviceID, Name, Status FROM Win32_PnPEntity WHERE PNPDeviceID LIKE ' + chr(34) + pattern + chr(37) + chr(34)
-            for dev in wmi.ExecQuery(query):
             print(f"[WMI] QUERY: {query}")
+            for dev in wmi.ExecQuery(query):
                 return dev.PNPDeviceID, dev.Name or '-', dev.Status or 'Unknown'
         except Exception as e:
             print(f"[WMI] Query error: {e}")
