@@ -22,6 +22,8 @@ except ImportError:
 
 # --- Constants ---
 DS5_VID = 0x054C
+# Feature reports that don't work over USB (need static fallback from driver)
+USB_UNSUPPORTED_FEATURES = {0x08, 0x80, 0x82, 0xF0}
 DS5_PIDS = {0x0CE6, 0x0DF2}
 DEFAULT_PORT = 5555
 USB_REPORT_SIZE = 64
@@ -515,7 +517,10 @@ class DS5Client:
     def _handle_feature_get(self, data):
         report_id = data[1]
         try:
-            response = self.dev.get_feature_report(report_id, 256)
+            if not self.is_bt and report_id in USB_UNSUPPORTED_FEATURES:
+                self.log(f'Feature GET 0x{report_id:02X}: unsupported on USB, skipping (driver uses static fallback)')
+                return
+            response = self.dev.get_feature_report(report_id, 64 if not self.is_bt else 256)
             if response:
                 resp_bytes = bytes(response)
                 self.log(f'Feature GET 0x{report_id:02X}: {len(resp_bytes)}B [{resp_bytes[:8].hex(" ")}...]')
@@ -533,6 +538,9 @@ class DS5Client:
     def _handle_feature_set(self, data):
         report_id = data[1]
         try:
+            if not self.is_bt and report_id in USB_UNSUPPORTED_FEATURES:
+                self.log(f'Feature SET 0x{report_id:02X}: unsupported on USB, skipping')
+                return
             self.log(f'Feature SET 0x{report_id:02X}: {len(data)}B [{data[:8].hex(" ")}...]')
             if self.is_bt:
                 buf = bytearray(64)
