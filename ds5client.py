@@ -515,7 +515,8 @@ class DS5Client:
     def _handle_feature_get(self, data):
         report_id = data[1]
         try:
-            response = self.dev.get_feature_report(report_id, 256)
+            size = 256 if self.is_bt else 64
+            response = self.dev.get_feature_report(report_id, size)
             if response:
                 resp_bytes = bytes(response)
                 self.log(f'Feature GET 0x{report_id:02X}: {len(resp_bytes)}B [{resp_bytes[:8].hex(" ")}...]')
