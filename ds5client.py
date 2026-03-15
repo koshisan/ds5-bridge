@@ -260,6 +260,9 @@ class DS5Client:
         self._haptic_peak_time = 0.0
         self.haptic_count = 0
         self.haptic_waveform = None
+        self._recording = False
+        self._record_wav = None
+        self._record_samples = 0
         self.haptic_input_peak = 0.0
 
     def log(self, msg):
@@ -668,6 +671,23 @@ class DS5Client:
                 self._update_peak(audio)
                 self._send_report_0x32(audio)
 
+    def start_recording(self, path):
+        import wave
+        self._record_wav = wave.open(path, 'wb')
+        self._record_wav.setnchannels(2)
+        self._record_wav.setsampwidth(2)  # 16-bit
+        self._record_wav.setframerate(48000)
+        self._recording = True
+        self._record_samples = 0
+        self.log(f'Recording to {path}')
+
+    def stop_recording(self):
+        self._recording = False
+        if self._record_wav:
+            self._record_wav.close()
+            self._record_wav = None
+        self.log(f'Recording stopped ({self._record_samples} samples)')
+
     _usb_audio_stream = None
     _usb_audio_pa = None
 
@@ -708,6 +728,11 @@ class DS5Client:
     def _handle_haptic(self, data):
         if data[0] == 0x40:
             raw_s16 = data[2:]
+
+            # Record raw s16 to wav
+            if self._recording and self._record_wav:
+                self._record_wav.writeframes(raw_s16)
+                self._record_samples += len(raw_s16) // 4
 
             # Input peak (raw s16, before any processing)
             if len(raw_s16) >= 4:
@@ -859,8 +884,12 @@ class DS5ClientGUI:
         haptic_frame = ttk.LabelFrame(tab_status, text='Haptic Audio', padding=8)
         haptic_frame.pack(fill='x', pady=(0, 8))
 
-        self.lbl_haptic = ttk.Label(haptic_frame, text='No data')
-        self.lbl_haptic.pack(anchor='w')
+        haptic_top = ttk.Frame(haptic_frame)
+        haptic_top.pack(fill='x')
+        self.lbl_haptic = ttk.Label(haptic_top, text='No data')
+        self.lbl_haptic.pack(side='left')
+        self.btn_record = ttk.Button(haptic_top, text='Record', width=8, command=self._toggle_record)
+        self.btn_record.pack(side='right')
 
         self.peak_canvas = tk.Canvas(haptic_frame, height=24, bg='#1a1a1a', highlightthickness=0)
         self.peak_canvas.pack(fill='x', pady=(4, 0))
@@ -1086,6 +1115,17 @@ class DS5ClientGUI:
         for pct in (0.25, 0.5, 0.75):
             x = int(pct * w)
             cv.create_line(x, h - 4, x, h, fill='#444444')
+
+    def _toggle_record(self):
+        if self.client._recording:
+            self.client.stop_recording()
+            self.btn_record.config(text='Record')
+        else:
+            from datetime import datetime
+            ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+            path = str(CONFIG_DIR / f'haptic_{ts}.wav')
+            self.client.start_recording(path)
+            self.btn_record.config(text='Stop Rec')
 
     def _auto_connect(self):
         def do():
