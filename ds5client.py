@@ -705,7 +705,7 @@ class DS5Client:
                 self.log('USB: DS5 speaker not found')
                 return False
             self._usb_audio_stream = sd.OutputStream(
-                device=ds5_idx, channels=channels, samplerate=48000, dtype='int16',
+                device=ds5_idx, channels=4, samplerate=48000, dtype='int16',
                 blocksize=256)
             self._usb_audio_stream.start()
             self._usb_channels = channels
