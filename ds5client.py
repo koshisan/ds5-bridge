@@ -597,9 +597,11 @@ class DS5Client:
             for i in range(OUTPUT_SAMPLES):
                 l_s16 = int(np.clip(left_ds[i], -32768, 32767))
                 r_s16 = int(np.clip(right_ds[i], -32768, 32767))
-                audio_data[i*2] = ((l_s16 >> 8) + 128) & 0xFF
-                audio_data[i*2+1] = ((r_s16 >> 8) + 128) & 0xFF
-
+                gain = self.config.get('haptic_gain', 4)
+                l_out = int(np.clip((l_s16 * gain) >> 8, -128, 127)) + 128
+                r_out = int(np.clip((r_s16 * gain) >> 8, -128, 127)) + 128
+                audio_data[i*2] = l_out & 0xFF
+                audio_data[i*2+1] = r_out & 0xFF
             # Waveform + peak
             self.haptic_waveform = list(audio_data)
             peak = max(abs(b - 128) for b in audio_data) / 128.0
