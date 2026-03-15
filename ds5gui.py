@@ -611,7 +611,6 @@ class DS5GUI:
         # Shared memory
         try:
             shared = self.server.read_shared_status()
-            print(f'[UPD] shared = {shared}')
             if shared and shared['driver_active']:
                 self.lbl_driver.config(text="Driver: ACTIVE", foreground='green')
                 self.lbl_client.config(text=f"Client: {shared['client_ip']}:{shared['client_port']}")
@@ -649,32 +648,48 @@ class DS5GUI:
         # Center line
         cv.create_line(0, mid, w, mid, fill='#333333')
 
-        # Source waveform (s16, blue) - top half reference
+        # Source waveform (s16, blue) - auto-scaled
         src = self.server.wave_source
         if src is not None and len(src) > 1:
-            import numpy as np
-            points = []
-            n = min(len(src), 64)
-            for i in range(n):
-                x = int(i * w / n)
-                y = mid - int((float(src[i]) / 32768.0) * mid * 0.9)
-                points.append((x, y))
-            if len(points) >= 2:
-                flat = [coord for pt in points for coord in pt]
-                cv.create_line(*flat, fill='#3366cc', width=1)
+            try:
+                src_list = [float(v) for v in src]
+                src_max = max(abs(v) for v in src_list)
+                if src_max < 1.0:
+                    src_max = 1.0  # avoid div by zero
+                points = []
+                n = min(len(src_list), 64)
+                for i in range(n):
+                    x = int(i * w / n)
+                    y = mid - int((src_list[i] / src_max) * mid * 0.85)
+                    points.append((x, y))
+                if len(points) >= 2:
+                    flat = [coord for pt in points for coord in pt]
+                    cv.create_line(*flat, fill='#3366cc', width=1)
+            except Exception:
+                pass
 
-        # Output waveform (u8, green) - centered at 128
+        # Output waveform (u8, green) - auto-scaled
         out = self.server.wave_output
         if out and len(out) > 1:
-            points = []
-            n = len(out)
-            for i in range(n):
-                x = int(i * w / n)
-                y = mid - int(((out[i] - 128) / 128.0) * mid * 0.9)
-                points.append((x, y))
-            if len(points) >= 2:
-                flat = [coord for pt in points for coord in pt]
-                cv.create_line(*flat, fill='#33cc66', width=2)
+            try:
+                out_centered = [b - 128 for b in out]
+                out_max = max(abs(v) for v in out_centered)
+                if out_max < 1:
+                    out_max = 1
+                points = []
+                n = len(out)
+                for i in range(n):
+                    x = int(i * w / n)
+                    y = mid - int((out_centered[i] / out_max) * mid * 0.85)
+                    points.append((x, y))
+                if len(points) >= 2:
+                    flat = [coord for pt in points for coord in pt]
+                    cv.create_line(*flat, fill='#33cc66', width=2)
+                # Scale label
+                cv.create_text(w - 4, 4, anchor='ne', text=f'src:{src_max:.0f} out:{out_max}',
+                              fill='#555555', font=('Consolas', 7))
+            except Exception:
+                pass
 
     def _driver_action(self, hwid, enable):
         def do():
