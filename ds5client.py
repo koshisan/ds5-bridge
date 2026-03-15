@@ -249,6 +249,7 @@ class DS5Client:
         self.haptic_peak_hold = 0.0
         self._haptic_peak_time = 0.0
         self.haptic_count = 0
+        self.haptic_waveform = None
 
     def log(self, msg):
         ts = datetime.now().strftime('%H:%M:%S')
@@ -561,6 +562,7 @@ class DS5Client:
             if audio_data is None:
                 continue
 
+            self.haptic_waveform = list(audio_data[:64])
             peak = max(abs(b - 128) for b in audio_data) / 128.0
             self.haptic_peak = peak
             self.haptic_count += 1
@@ -642,7 +644,7 @@ class DS5ClientGUI:
 
         self.root = tk.Tk()
         self.root.title('DS5 Bridge Client')
-        self.root.geometry('520x460')
+        self.root.geometry('520x520')
         self.root.resizable(False, False)
         self.root.protocol('WM_DELETE_WINDOW', self._on_close)
 
@@ -722,6 +724,9 @@ class DS5ClientGUI:
 
         self.peak_canvas = tk.Canvas(haptic_frame, height=24, bg='#1a1a1a', highlightthickness=0)
         self.peak_canvas.pack(fill='x', pady=(4, 0))
+
+        self.wave_canvas = tk.Canvas(haptic_frame, height=60, bg='#1a1a1a', highlightthickness=0)
+        self.wave_canvas.pack(fill='x', pady=(4, 0))
 
         # === Tab 2: Config ===
         tab_config = ttk.Frame(notebook, padding=10)
@@ -855,6 +860,30 @@ class DS5ClientGUI:
             self._draw_peak_meter()
         else:
             self.lbl_haptic.config(text='No haptic data')
+
+        # Waveform
+        wf = self.client.haptic_waveform
+        if wf and len(wf) >= 4:
+            cv = self.wave_canvas
+            cv.delete('all')
+            w = cv.winfo_width() or 480
+            h = cv.winfo_height() or 60
+            mid = h // 2
+            cv.create_line(0, mid, w, mid, fill='#333333')
+            # Draw L channel (even bytes) and R channel (odd bytes)
+            n = len(wf) // 2
+            pts_l = []
+            pts_r = []
+            for i in range(n):
+                x = int(i * w / n)
+                yl = mid - int(((wf[i*2] - 128) / 128.0) * mid * 0.9)
+                yr = mid - int(((wf[i*2+1] - 128) / 128.0) * mid * 0.9)
+                pts_l.append((x, yl))
+                pts_r.append((x, yr))
+            if len(pts_l) >= 2:
+                cv.create_line(*[c for p in pts_l for c in p], fill='#66aaff', width=1)
+                cv.create_line(*[c for p in pts_r for c in p], fill='#33cc66', width=1)
+                cv.create_text(w - 4, 4, anchor='ne', text='L/R u8', fill='#555555', font=('Consolas', 7))
 
         self.root.after(50, self._update_loop)
 
