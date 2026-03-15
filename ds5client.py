@@ -197,24 +197,25 @@ class DS5Client:
         client_port = self.config.get('client_port', 0)
         proto = self.config.get('protocol', 'udp')
 
-        if proto == 'tcp':
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.settimeout(3.0)
-            try:
-                self.sock.connect((host, port))
-            except Exception as e:
-                self.log(f'TCP connect failed: {e}')
-                self.sock.close()
-                self.sock = None
-                return
-            self.sock.settimeout(None)
-            self._is_tcp = True
-        else:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.sock.bind(('0.0.0.0', client_port))
-            self._is_tcp = False
-
+        # Input is always UDP
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind(('0.0.0.0', client_port))
         self.target = (host, port)
+
+        # Return channel: UDP (same socket) or TCP (separate connection)
+        self._is_tcp = (proto == 'tcp')
+        self._tcp_sock = None
+        if self._is_tcp:
+            try:
+                self._tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self._tcp_sock.settimeout(3.0)
+                self._tcp_sock.connect((host, port))
+                self._tcp_sock.settimeout(None)
+                self.log(f'TCP return channel connected to {host}:{port}')
+            except Exception as e:
+                self.log(f'TCP return channel failed: {e} - falling back to UDP')
+                self._tcp_sock = None
+                self._is_tcp = False
         self.running = True
         self.server_alive = False
         self._last_server_rx = 0
@@ -236,6 +237,10 @@ class DS5Client:
     def stop(self):
         """Stop bridge."""
         self.running = False
+        if self._tcp_sock:
+            try: self._tcp_sock.close()
+            except: pass
+            self._tcp_sock = None
         if self.sock:
             try: self.sock.close()
             except: pass
@@ -252,6 +257,29 @@ class DS5Client:
         self.connected = False
         self.hw_info = {}
         self.log('DS5 disconnected')
+
+    def _try_reconnect(self):
+        """Auto-reconnect to DS5 in background."""
+        def loop():
+            attempt = 0
+            while self.running and not self.connected:
+                attempt += 1
+                time.sleep(2)
+                if self.dev:
+                    try: self.dev.close()
+                    except: pass
+                    self.dev = None
+                self.log(f'Reconnecting DS5... (attempt {attempt})')
+                ok, msg = self.find_and_open()
+                if ok:
+                    self.log('DS5 reconnected!')
+                    # Restart input thread
+                    self._in_thread = threading.Thread(target=self._input_loop, daemon=True)
+                    self._in_thread.start()
+                    return
+            if not self.running:
+                self.log('Reconnect cancelled (bridge stopped)')
+        threading.Thread(target=loop, daemon=True).start()
 
     def _input_loop(self):
         """Read from DS5, send to server."""
@@ -271,10 +299,7 @@ class DS5Client:
                 copy_len = min(len(src), USB_REPORT_SIZE - 1)
                 report[1:1 + copy_len] = src[:copy_len]
 
-                if self._is_tcp:
-                    self.sock.sendall(bytes(report))
-                else:
-                    self.sock.sendto(bytes(report), self.target)
+                self.sock.sendto(bytes(report), self.target)
                 self.packets_sent += 1
 
                 # Rate calculation
@@ -288,7 +313,9 @@ class DS5Client:
 
             except Exception as e:
                 if self.running:
-                    self.log(f'Input error: {e}')
+                    self.log(f'DS5 disconnected: {e}')
+                    self.connected = False
+                    self._try_reconnect()
                 break
 
     def _output_loop(self):
@@ -296,13 +323,14 @@ class DS5Client:
         seq = 0
         while self.running:
             try:
-                self.sock.settimeout(1.0)
-                if self._is_tcp:
-                    data = self.sock.recv(512)
+                if self._is_tcp and self._tcp_sock:
+                    self._tcp_sock.settimeout(1.0)
+                    data = self._tcp_sock.recv(512)
                     if not data:
-                        self.log('TCP connection closed by server')
+                        self.log('TCP return channel closed by server')
                         break
                 else:
+                    self.sock.settimeout(1.0)
                     data, addr = self.sock.recvfrom(512)
                 if len(data) < 2:
                     continue
@@ -357,8 +385,8 @@ class DS5Client:
             response = self.dev.get_feature_report(report_id, 256)
             if response:
                 pkt = bytes([0x04, report_id]) + bytes(response)
-                if self._is_tcp:
-                    self.sock.sendall(pkt)
+                if self._is_tcp and self._tcp_sock:
+                    self._tcp_sock.sendall(pkt)
                 else:
                     self.sock.sendto(pkt, self.target)
                 self.features_handled += 1
@@ -600,6 +628,8 @@ class DS5ClientGUI:
             for key, lbl in self.hw_labels.items():
                 val = self.client.hw_info.get(key, '-')
                 lbl.config(text=val if val else '-')
+        elif self.client.running:
+            self.lbl_ds5.config(text='Reconnecting...', foreground='orange')
         else:
             self.lbl_ds5.config(text='Not connected', foreground='red')
             for lbl in self.hw_labels.values():
