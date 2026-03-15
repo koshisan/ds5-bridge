@@ -324,24 +324,12 @@ class DS5Server:
 
         channels = int(ds5_lb['maxInputChannels'])
         rate = int(ds5_lb['defaultSampleRate'])
-        sample_buffer = bytearray()
-        seq = 0
+        seq = [0]
         target = None
-        target_samples = 3000
+        target_check = 0.0
 
-        self._capture_info = f"Loopback: {channels}ch S16 {rate}Hz | Haptic: ch{'3+4' if channels >= 4 else '1+2'} | Resample: {rate}->{target_samples}Hz\nConv: S16->U8 | UDP -> client (from shared memory)"
-        print(f"[DS5] Capture: {channels}ch {rate}Hz S16 -> {target}")
-
-        def send_packet():
-            nonlocal seq
-            if len(sample_buffer) < 64:
-                return
-            audio_data = bytes(sample_buffer[:64])
-            del sample_buffer[:64]
-            packet = bytes([0x32, seq & 0xFF]) + audio_data
-            self.sock.sendto(packet, target)
-            seq = (seq + 1) & 0xFF
-            self.packets_sent += 1
+        self._capture_info = f"Loopback: {channels}ch S16 {rate}Hz | Haptic: ch{'3+4' if channels >= 4 else '1+2'} | Streaming raw S16 to client"
+        print(f"[DS5] Capture: {channels}ch {rate}Hz S16 -> streaming raw to client")
 
         def callback(in_data, frame_count, time_info, status):
             if not self.capturing:
