@@ -186,18 +186,18 @@ def read_ds5_info(dev, is_bt):
             info['hw_version'] = f'{r[1]}.{r[2]}.{r[3]}'
     except: pass
 
-    # 0x80/0x81 subcommands (BT only — need CRC, USB uses different format)
-    if is_bt:
-        subcmds = [
-            (0x01, 0x13, 'serial'),
-            (0x09, 0x02, 'pcba_mac'),
-            (0x01, 0x18, 'battery_barcode'),
-            (0x01, 0x1a, 'vcm_barcode_l'),
-            (0x01, 0x1c, 'vcm_barcode_r'),
-            (0x01, 0x15, 'board_info'),
-        ]
-        for sub1, sub2, key in subcmds:
-            try:
+    # 0x80/0x81 subcommands
+    subcmds = [
+        (0x01, 0x13, 'serial'),
+        (0x09, 0x02, 'pcba_mac'),
+        (0x01, 0x18, 'battery_barcode'),
+        (0x01, 0x1a, 'vcm_barcode_l'),
+        (0x01, 0x1c, 'vcm_barcode_r'),
+        (0x01, 0x15, 'board_info'),
+    ]
+    for sub1, sub2, key in subcmds:
+        try:
+            if is_bt:
                 payload = bytearray(64)
                 payload[0] = 0x80
                 payload[1] = sub1
@@ -205,18 +205,25 @@ def read_ds5_info(dev, is_bt):
                 crc = ds5_crc32_payload([0x53, 0x80], payload[1:60])
                 struct.pack_into('<I', payload, 60, crc)
                 dev.send_feature_report(bytes(payload))
-                time.sleep(0.03)
-                resp = dev.get_feature_report(0x81, 64)
-                if resp and len(resp) >= 5 and resp[1] == sub1 and resp[2] == sub2:
-                    data = bytes(resp[4:])
-                    if key in ('serial', 'battery_barcode', 'vcm_barcode_l', 'vcm_barcode_r'):
-                        info[key] = data.split(b'\x00')[0].decode('ascii', errors='replace')
-                    elif key == 'board_info':
-                        info['board_version'] = f'{data[0]}.{data[1]}'
-                        info['color_id'] = f'0x{data[3]:02X}{data[2]:02X}'
-                    elif key == 'pcba_mac':
-                        info['pcba_mac'] = ':'.join(f'{b:02X}' for b in data[:6])
-            except: pass
+            else:
+                # USB: no CRC needed
+                payload = bytearray(64)
+                payload[0] = 0x80
+                payload[1] = sub1
+                payload[2] = sub2
+                dev.send_feature_report(bytes(payload))
+            time.sleep(0.03)
+            resp = dev.get_feature_report(0x81, 64)
+            if resp and len(resp) >= 5 and resp[1] == sub1 and resp[2] == sub2:
+                data = bytes(resp[4:])
+                if key in ('serial', 'battery_barcode', 'vcm_barcode_l', 'vcm_barcode_r'):
+                    info[key] = data.split(b'\x00')[0].decode('ascii', errors='replace')
+                elif key == 'board_info':
+                    info['board_version'] = f'{data[0]}.{data[1]}'
+                    info['color_id'] = f'0x{data[3]:02X}{data[2]:02X}'
+                elif key == 'pcba_mac':
+                    info['pcba_mac'] = ':'.join(f'{b:02X}' for b in data[:6])
+        except: pass
 
     return info
 
