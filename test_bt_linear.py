@@ -32,6 +32,7 @@ def send_haptic(audio):
     seq = (seq + 1) & 0x0F
 
 repeats = int(sys.argv[1]) if len(sys.argv) > 1 else 6
+interval_ms = float(sys.argv[2]) if len(sys.argv) > 2 else 0  # 0 = blast
 
 # Build all samples: 1,2,3,...,254,255 then 255,254,...,2,1 = one full cycle = 508 samples
 # Repeat that 'repeats' times
@@ -62,6 +63,8 @@ print(f"Blasting...")
 start = time.perf_counter()
 for pkt in packets:
     send_haptic(pkt)
+    if interval_ms > 0:
+        time.sleep(interval_ms / 1000.0)
 elapsed = time.perf_counter() - start
 
 print(f"\n{len(packets)} packets in {elapsed:.2f}s = {len(packets)/elapsed:.0f} Hz")
