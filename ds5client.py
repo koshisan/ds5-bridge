@@ -596,9 +596,9 @@ class DS5Client:
             self.haptic_peak_hold = max(self.haptic_peak_hold - 0.01, peak)
 
     def _resample_chunk(self, chunk):
-        """Resample s16 stereo chunk to 32 u8 stereo samples."""
+        """Resample s16 stereo chunk to 32 u8 stereo samples with dithering."""
         import numpy as np
-        from scipy.signal import resample as sp_resample
+        from scipy.signal import resample_poly
         n = len(chunk) // 4
         left = np.zeros(n, dtype=np.float64)
         right = np.zeros(n, dtype=np.float64)
@@ -606,16 +606,27 @@ class DS5Client:
             l, r = struct.unpack_from('<hh', chunk, i * 4)
             left[i] = l
             right[i] = r
-        left_ds = sp_resample(left, 32)
-        right_ds = sp_resample(right, 32)
-        gain = self.config.get('haptic_gain', 4)
+        # Polyphase resampling (better than FFT for streaming chunks)
+        # Downsample ratio: n -> 32 samples
+        # Use resample_poly with up=32, down=n for exact ratio
+        if n > 32:
+            left_ds = resample_poly(left, 32, n)[:32]
+            right_ds = resample_poly(right, 32, n)[:32]
+        elif n == 32:
+            left_ds = left
+            right_ds = right
+        else:
+            left_ds = resample_poly(left, 32, n)[:32]
+            right_ds = resample_poly(right, 32, n)[:32]
+        gain = self.config.get('haptic_gain', 2.0)
+        # Apply gain, then quantize s16 -> u8 with TPDF dithering
+        dither = np.random.triangular(-1, 0, 1, size=32)
         audio = bytearray(64)
         for i in range(32):
-            l_s16 = int(np.clip(left_ds[i], -32768, 32767))
-            r_s16 = int(np.clip(right_ds[i], -32768, 32767))
-            import numpy as np
-            l_out = int(np.clip(int(l_s16 * gain) >> 8, -128, 127)) + 128
-            r_out = int(np.clip(int(r_s16 * gain) >> 8, -128, 127)) + 128
+            l_f = left_ds[i] * gain / 256.0 + dither[i]
+            r_f = right_ds[i] * gain / 256.0 + dither[i]
+            l_out = int(np.clip(round(l_f), -128, 127)) + 128
+            r_out = int(np.clip(round(r_f), -128, 127)) + 128
             audio[i*2] = l_out & 0xFF
             audio[i*2+1] = r_out & 0xFF
         return audio
