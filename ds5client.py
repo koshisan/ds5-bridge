@@ -432,7 +432,7 @@ class DS5Client:
                         break
                 else:
                     self.sock.settimeout(1.0)
-                    data, addr = self.sock.recvfrom(512)
+                    data, addr = self.sock.recvfrom(2048)
                 if len(data) < 2:
                     continue
                 self.server_alive = True
@@ -452,6 +452,10 @@ class DS5Client:
                 if data[0] in (0x32, 0x40):
                     self._handle_haptic(data)
                     continue
+
+                # Unknown prefix - log it
+                if data[0] not in (0x02, 0x03, 0x05):
+                    self.log(f'Unknown packet: 0x{data[0]:02X} len={len(data)}')
 
                 # Output report (0x02)
                 if self.is_bt:
