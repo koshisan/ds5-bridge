@@ -641,17 +641,22 @@ class DS5Client:
                 if time.monotonic_ns() - next_ns > 100_000_000:
                     next_ns = time.monotonic_ns()
             else:
-                time.sleep(0.001)
+                pass  # no delay - blast mode
 
             if mode == 'resample':
+                # Take whatever s16 data we have, resample to 32 output samples
                 with self._haptic_lock:
-                    if len(self._haptic_s16_buffer) >= INPUT_BYTES_PER_TICK:
+                    if timed and len(self._haptic_s16_buffer) >= INPUT_BYTES_PER_TICK:
                         chunk = bytes(self._haptic_s16_buffer[:INPUT_BYTES_PER_TICK])
                         del self._haptic_s16_buffer[:INPUT_BYTES_PER_TICK]
-                    elif not timed and len(self._haptic_s16_buffer) >= 64:
-                        chunk = bytes(self._haptic_s16_buffer)
-                        self._haptic_s16_buffer.clear()
+                    elif not timed and len(self._haptic_s16_buffer) >= 128:
+                        # Untimed: take ~32 s16 stereo samples (128 bytes) = minimal chunk
+                        take = min(len(self._haptic_s16_buffer), INPUT_BYTES_PER_TICK)
+                        chunk = bytes(self._haptic_s16_buffer[:take])
+                        del self._haptic_s16_buffer[:take]
                     else:
+                        if not timed:
+                            time.sleep(0.001)
                         continue
                 audio = self._resample_chunk(chunk)
                 self._update_peak(audio)
