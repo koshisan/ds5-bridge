@@ -724,6 +724,10 @@ class DS5Client:
                     try:
                         gain = self.config.get('haptic_gain', 2.0)
                         n_samples = len(raw_s16) // 4
+                        if self.haptic_count % 100 == 0:
+                            # Log every 100th packet
+                            l0 = int.from_bytes(raw_s16[0:2], 'little', signed=True)
+                            self.log(f'USB audio: gain={gain:.1f} samples={n_samples} raw_l0={l0} gained={int(l0*gain)}')
                         if self._usb_channels == 4:
                             out = bytearray(n_samples * 8)
                             for i in range(n_samples):
