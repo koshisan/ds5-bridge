@@ -364,11 +364,8 @@ class DS5Server:
                 left_ds = resample(left, target_len)
                 right_ds = resample(right, target_len)
 
-                # Capture waveform for visualization
-                self.wave_source = left[:64].copy()
-                self.source_peak = float(np.max(np.abs(left))) / 32768.0
-
                 u8_block = []
+                s16_resampled = []
                 for i in range(target_len):
                     l_s16 = int(np.clip(left_ds[i], -32768, 32767))
                     r_s16 = int(np.clip(right_ds[i], -32768, 32767))
@@ -377,8 +374,12 @@ class DS5Server:
                     sample_buffer.append(l_u8)
                     sample_buffer.append(r_u8)
                     u8_block.append(l_u8)
+                    s16_resampled.append(l_s16)
 
-                self.wave_output = u8_block[:32]
+                # Capture waveform: both post-resample, same time window
+                self.wave_source = s16_resampled[:32]  # s16 after resample (3kHz)
+                self.wave_output = u8_block[:32]        # u8 after conversion (3kHz)
+                self.source_peak = max(abs(v) for v in s16_resampled[:32]) / 32768.0 if s16_resampled else 0.0
                 self.output_peak = max(abs(b - 128) for b in u8_block[:32]) / 128.0 if u8_block else 0.0
 
             now = time.time()
@@ -648,19 +649,29 @@ class DS5GUI:
         # Center line
         cv.create_line(0, mid, w, mid, fill='#333333')
 
-        # Source waveform (s16, blue) - auto-scaled
         src = self.server.wave_source
+        out = self.server.wave_output
+
+        # Shared scale: use the larger of both ranges (minimum 100 for s16 / 2 for u8)
+        src_max = 100.0
+        out_max = 2
+        if src and len(src) > 1:
+            m = max(abs(float(v)) for v in src)
+            if m > src_max:
+                src_max = m
+        if out and len(out) > 1:
+            m = max(abs(b - 128) for b in out)
+            if m > out_max:
+                out_max = m
+
+        # Source waveform (s16 post-resample, blue)
         if src is not None and len(src) > 1:
             try:
-                src_list = [float(v) for v in src]
-                src_max = max(abs(v) for v in src_list)
-                if src_max < 1.0:
-                    src_max = 1.0  # avoid div by zero
                 points = []
-                n = min(len(src_list), 64)
+                n = len(src)
                 for i in range(n):
                     x = int(i * w / n)
-                    y = mid - int((src_list[i] / src_max) * mid * 0.85)
+                    y = mid - int((float(src[i]) / src_max) * mid * 0.85)
                     points.append((x, y))
                 if len(points) >= 2:
                     flat = [coord for pt in points for coord in pt]
@@ -668,28 +679,24 @@ class DS5GUI:
             except Exception:
                 pass
 
-        # Output waveform (u8, green) - auto-scaled
-        out = self.server.wave_output
+        # Output waveform (u8, green) — same time window
         if out and len(out) > 1:
             try:
-                out_centered = [b - 128 for b in out]
-                out_max = max(abs(v) for v in out_centered)
-                if out_max < 1:
-                    out_max = 1
                 points = []
                 n = len(out)
                 for i in range(n):
                     x = int(i * w / n)
-                    y = mid - int((out_centered[i] / out_max) * mid * 0.85)
+                    y = mid - int(((out[i] - 128) / out_max) * mid * 0.85)
                     points.append((x, y))
                 if len(points) >= 2:
                     flat = [coord for pt in points for coord in pt]
                     cv.create_line(*flat, fill='#33cc66', width=2)
-                # Scale label
-                cv.create_text(w - 4, 4, anchor='ne', text=f'src:{src_max:.0f} out:{out_max}',
-                              fill='#555555', font=('Consolas', 7))
             except Exception:
                 pass
+
+        # Scale label
+        cv.create_text(w - 4, 4, anchor='ne', text=f's16:{src_max:.0f} u8:{out_max}',
+                      fill='#555555', font=('Consolas', 7))
 
     def _driver_action(self, hwid, enable):
         def do():
