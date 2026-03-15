@@ -757,13 +757,17 @@ class DS5GUI:
                 (DRIVER_HWID, self.lbl_hid, self.lbl_hid_info),
                 (AUDIO_HWID, self.lbl_audio, self.lbl_audio_info),
             ]:
-                status, name, version, date = self._get_driver_details(hwid)
-                is_on = status == 'OK'
-                self.root.after(0, lambda l=lbl_status, s=is_on: l.config(
-                    text=f"Status: {'ON' if s else 'OFF'}",
-                    foreground='green' if s else 'red'))
-                self.root.after(0, lambda l=lbl_info, n=name, v=version, d=date: l.config(
-                    text=f"{n}  |  v{v}  |  {d}"))
+                try:
+                    status, name, version, date = self._get_driver_details(hwid)
+                    is_on = status == 'OK'
+                    self.root.after(0, lambda l=lbl_status, s=is_on: l.config(
+                        text=f"Status: {'ON' if s else 'OFF'}",
+                        foreground='green' if s else 'red'))
+                    self.root.after(0, lambda l=lbl_info, n=name, v=version, d=date: l.config(
+                        text=f"{n}  |  v{v}  |  {d}"))
+                except Exception:
+                    self.root.after(0, lambda l=lbl_status: l.config(text="Status: ?", foreground='gray'))
+                    self.root.after(0, lambda l=lbl_info: l.config(text="(query failed)"))
         threading.Thread(target=do, daemon=True).start()
 
     def _toggle_capture(self):
