@@ -138,6 +138,7 @@ class DS5Client:
         self.connected = False
         self.running = False
         self.sock = None
+        self._tcp_sock = None
         self._is_tcp = False
         self.server_alive = False
         self._last_server_rx = 0
