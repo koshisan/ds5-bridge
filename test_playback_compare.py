@@ -48,12 +48,15 @@ time.sleep(1)
 
 print(f"\n=== pyaudiowpatch (4ch, ch3+4) ===")
 stream = pa.open(format=pyaudio.paInt16, channels=4, rate=rate, output=True,
-                 output_device_index=ds5_pa['index'], frames_per_buffer=256)
-# Write in chunks
-chunk = 256
+                 output_device_index=ds5_pa['index'], frames_per_buffer=1024)
 raw = out_4ch[:max_samples].tobytes()
-for i in range(0, len(raw), chunk * 4 * 2):
-    stream.write(raw[i:i + chunk * 4 * 2])
+bytes_per_frame = 4 * 2  # 4 channels * 2 bytes
+chunk_frames = 1024
+chunk_bytes = chunk_frames * bytes_per_frame
+for i in range(0, len(raw), chunk_bytes):
+    block = raw[i:i + chunk_bytes]
+    if block:
+        stream.write(block)
 stream.stop_stream()
 stream.close()
 pa.terminate()
