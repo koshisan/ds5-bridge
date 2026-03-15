@@ -274,10 +274,12 @@ class DS5Server:
         try:
             import win32com.client
             wmi = win32com.client.GetObject("winmgmts:" + chr(92)*2 + "." + chr(92) + "root" + chr(92) + "cimv2")
+            print(f"[WMI] GetObject OK")
             # WQL LIKE needs backslashes doubled
             pattern = hwid.replace(chr(92), chr(37)).replace(chr(38), chr(37))
             query = 'SELECT PNPDeviceID, Name, Status FROM Win32_PnPEntity WHERE PNPDeviceID LIKE ' + chr(34) + pattern + chr(37) + chr(34)
             for dev in wmi.ExecQuery(query):
+            print(f"[WMI] QUERY: {query}")
                 return dev.PNPDeviceID, dev.Name or '-', dev.Status or 'Unknown'
         except Exception as e:
             print(f"[WMI] Query error: {e}")
