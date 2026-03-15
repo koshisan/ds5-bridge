@@ -309,8 +309,6 @@ class DS5Server:
         return ((s16 >> 8) + 128) & 0xFF
 
     def _capture_loop(self):
-        from scipy.signal import resample
-
         p = pyaudio.PyAudio()
         ds5_lb = None
         for i in range(p.get_device_count()):
@@ -350,55 +348,53 @@ class DS5Server:
                 return (None, pyaudio.paComplete)
             samples = np.frombuffer(in_data, dtype=np.int16).reshape(-1, channels)
             if channels >= 4:
-                left = samples[:, 2].astype(np.float64)
-                right = samples[:, 3].astype(np.float64)
+                left = samples[:, 2]
+                right = samples[:, 3]
             else:
-                left = samples[:, 0].astype(np.float64)
-                right = samples[:, 1].astype(np.float64) if channels >= 2 else left
+                left = samples[:, 0]
+                right = samples[:, 1] if channels >= 2 else samples[:, 0]
 
-            peak = max(np.max(np.abs(left)), np.max(np.abs(right))) / 32768.0
+            peak = max(int(np.max(np.abs(left))), int(np.max(np.abs(right)))) / 32768.0
             self.last_peak = peak
 
-            target_len = int(len(left) * target_samples / rate)
-            if target_len > 0:
-                left_ds = resample(left, target_len)
-                right_ds = resample(right, target_len)
-
-                u8_block = []
-                s16_resampled = []
-                for i in range(target_len):
-                    l_s16 = int(np.clip(left_ds[i], -32768, 32767))
-                    r_s16 = int(np.clip(right_ds[i], -32768, 32767))
-                    l_u8 = self._s16_to_u8(l_s16)
-                    r_u8 = self._s16_to_u8(r_s16)
-                    sample_buffer.append(l_u8)
-                    sample_buffer.append(r_u8)
-                    u8_block.append(l_u8)
-                    s16_resampled.append(l_s16)
-
-                # Capture waveform: both post-resample, same time window
-                self.wave_source = s16_resampled[:32]  # s16 after resample (3kHz)
-                self.wave_output = u8_block[:32]        # u8 after conversion (3kHz)
-                self.source_peak = max(abs(v) for v in s16_resampled[:32]) / 32768.0 if s16_resampled else 0.0
-                self.output_peak = max(abs(b - 128) for b in u8_block[:32]) / 128.0 if u8_block else 0.0
+            # Waveform capture (raw s16)
+            self.wave_source = [int(v) for v in left[:32]]
+            self.source_peak = peak
 
             now = time.time()
             if peak > self.config['threshold']:
                 self.send_until = now + 1.0
-            # Always update target from shared memory
-            nonlocal target
-            shared = self.read_shared_status()
-            if shared and shared['client_port'] > 0:
-                target = (shared['client_ip'], shared['client_port'])
 
-            if now < self.send_until:
-                if target:
-                    while len(sample_buffer) >= 64:
-                        send_packet()
-                else:
-                    sample_buffer.clear()
+            # Update target from shared memory (every ~1s, not every callback)
+            nonlocal target, target_check
+            if now - target_check > 1.0:
+                shared = self.read_shared_status()
+                if shared and shared['client_port'] > 0:
+                    target = (shared['client_ip'], shared['client_port'])
+                target_check = now
+
+            if now < self.send_until and target:
+                # Stream raw s16 stereo (ch3+4) to client
+                # Packet: [0x40, seq, s16_L0, s16_R0, s16_L1, s16_R1, ...]
+                import struct as st
+                raw = bytearray(2 + len(left) * 4)
+                raw[0] = 0x40
+                raw[1] = seq[0] & 0xFF
+                seq[0] = (seq[0] + 1) & 0xFF
+                offset = 2
+                for i in range(len(left)):
+                    st.pack_into('<hh', raw, offset, int(left[i]), int(right[i]))
+                    offset += 4
+                self.sock.sendto(bytes(raw), target)
+                self.packets_sent += 1
+
+                # Output waveform = just the raw s16 (conversion happens at client now)
+                self.wave_output = [int(v) for v in left[:32]]
+                self.output_peak = peak
             else:
-                sample_buffer.clear()
+                self.wave_output = None
+                self.output_peak = 0.0
+
             return (None, pyaudio.paContinue)
 
         try:

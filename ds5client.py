@@ -337,6 +337,7 @@ class DS5Client:
     def stop(self):
         """Stop bridge."""
         self.running = False
+        self._haptic_sender_running = False
         if self._tcp_sock:
             try: self._tcp_sock.close()
             except: pass
@@ -447,8 +448,8 @@ class DS5Client:
                     self._handle_feature_set(data)
                     continue
 
-                # Haptic audio (0x32)
-                if data[0] == 0x32:
+                # Haptic audio: 0x32 (old u8 format) or 0x40 (raw s16 stream)
+                if data[0] in (0x32, 0x40):
                     self._handle_haptic(data)
                     continue
 
