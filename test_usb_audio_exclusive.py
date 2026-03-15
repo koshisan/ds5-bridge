@@ -1,81 +1,87 @@
-"""Test: write a sine wave to DS5 USB speaker in both shared and exclusive mode."""
+"""Test: write sine wave to DS5 USB speaker - shared vs exclusive mode."""
 import sys
 import time
-import struct
-import math
+import numpy as np
+import sounddevice as sd
 
-# Test 1: list DS5 audio devices
-try:
-    import sounddevice as sd
-    print("=== sounddevice devices ===")
-    devices = sd.query_devices()
-    for i, d in enumerate(devices):
-        if 'DualSense' in d['name'] or 'Wireless Controller' in d['name']:
-            print(f"  [{i}] {d['name']} out={d['max_output_channels']} in={d['max_input_channels']} sr={d['default_samplerate']}")
-    print()
-except ImportError:
-    print("pip install sounddevice")
-    sys.exit(1)
-
-# Find DS5 output
+# Find DS5
+devices = sd.query_devices()
 ds5_idx = None
-ds5_ch = 0
 for i, d in enumerate(devices):
     if ('DualSense' in d['name'] or 'Wireless Controller' in d['name']) and d['max_output_channels'] >= 2:
         ds5_idx = i
         ds5_ch = d['max_output_channels']
+        print(f"DS5: [{i}] {d['name']} ch={ds5_ch} sr={d['default_samplerate']}")
         break
 
 if ds5_idx is None:
-    print("No DS5 USB speaker found")
+    print("No DS5 found")
     sys.exit(1)
 
-print(f"Using device [{ds5_idx}] channels={ds5_ch}")
-
-# Generate 2 seconds of 200Hz sine wave on ch3+4
 duration = 2.0
 rate = 48000
 freq = 200
 n_samples = int(duration * rate)
-amplitude = 0.5
+channels = min(ds5_ch, 4)
 
-import numpy as np
+# Sine on ch3+4
+data_f32 = np.zeros((n_samples, channels), dtype=np.float32)
+data_s16 = np.zeros((n_samples, channels), dtype=np.int16)
+t = np.arange(n_samples) / rate
+sine_f32 = (0.5 * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+sine_s16 = (16000 * np.sin(2 * np.pi * freq * t)).astype(np.int16)
 
-# Test shared mode
-print("\n=== SHARED MODE (2s, 200Hz sine on ch3+4) ===")
+if channels >= 4:
+    data_f32[:, 2] = sine_f32
+    data_f32[:, 3] = sine_f32
+    data_s16[:, 2] = sine_s16
+    data_s16[:, 3] = sine_s16
+else:
+    data_f32[:, 0] = sine_f32
+    data_f32[:, 1] = sine_f32
+    data_s16[:, 0] = sine_s16
+    data_s16[:, 1] = sine_s16
+
+print(f"\n=== TEST 1: Shared, float32 ===")
 try:
-    data = np.zeros((n_samples, min(ds5_ch, 4)), dtype=np.float32)
-    t = np.arange(n_samples) / rate
-    sine = (amplitude * np.sin(2 * np.pi * freq * t)).astype(np.float32)
-    if ds5_ch >= 4:
-        data[:, 2] = sine  # ch3
-        data[:, 3] = sine  # ch4
-    else:
-        data[:, 0] = sine
-        data[:, 1] = sine
-    sd.play(data, samplerate=rate, device=ds5_idx, blocking=True)
-    print("  Done - did you feel it?")
+    sd.play(data_f32, samplerate=rate, device=ds5_idx, blocking=True)
+    print("  Done")
 except Exception as e:
     print(f"  Error: {e}")
-
 time.sleep(1)
 
-# Test exclusive mode
-print("\n=== EXCLUSIVE MODE (2s, 200Hz sine on ch3+4) ===")
+print(f"\n=== TEST 2: Shared, int16 ===")
 try:
-    data = np.zeros((n_samples, min(ds5_ch, 4)), dtype=np.float32)
-    t = np.arange(n_samples) / rate
-    sine = (amplitude * np.sin(2 * np.pi * freq * t)).astype(np.float32)
-    if ds5_ch >= 4:
-        data[:, 2] = sine
-        data[:, 3] = sine
-    else:
-        data[:, 0] = sine
-        data[:, 1] = sine
-    sd.play(data, samplerate=rate, device=ds5_idx, blocking=True,
+    sd.play(data_s16, samplerate=rate, device=ds5_idx, blocking=True)
+    print("  Done")
+except Exception as e:
+    print(f"  Error: {e}")
+time.sleep(1)
+
+# Exclusive attempts with different configs
+for dtype, data, label in [
+    ('int16', data_s16, 'Exclusive int16'),
+    ('float32', data_f32, 'Exclusive float32'),
+]:
+    print(f"\n=== TEST: {label} ===")
+    try:
+        sd.play(data, samplerate=rate, device=ds5_idx, blocking=True,
+                extra_settings=sd.WasapiSettings(exclusive=True))
+        print("  Done")
+    except Exception as e:
+        print(f"  Error: {e}")
+    time.sleep(0.5)
+
+# Exclusive with 2ch only
+print(f"\n=== TEST: Exclusive int16, 2ch stereo ===")
+try:
+    data_2ch = np.zeros((n_samples, 2), dtype=np.int16)
+    data_2ch[:, 0] = sine_s16
+    data_2ch[:, 1] = sine_s16
+    sd.play(data_2ch, samplerate=rate, device=ds5_idx, blocking=True,
             extra_settings=sd.WasapiSettings(exclusive=True))
-    print("  Done - did you feel it?")
+    print("  Done")
 except Exception as e:
     print(f"  Error: {e}")
 
-print("\nWhich felt stronger?")
+print("\nWhich tests produced vibration?")
