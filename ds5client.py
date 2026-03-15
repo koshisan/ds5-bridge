@@ -245,6 +245,10 @@ class DS5Client:
         self.send_rate = 0.0
         self._rate_count = 0
         self._rate_time = time.monotonic()
+        self.haptic_peak = 0.0
+        self.haptic_peak_hold = 0.0
+        self._haptic_peak_time = 0.0
+        self.haptic_count = 0
 
     def log(self, msg):
         ts = datetime.now().strftime('%H:%M:%S')
@@ -517,6 +521,18 @@ class DS5Client:
         if len(audio_samples) < 64:
             audio_samples = audio_samples + bytes(64 - len(audio_samples))
 
+        # Peak measurement (u8: 128=center, 0/255=max)
+        peak = max(abs(b - 128) for b in audio_samples) / 128.0
+        self.haptic_peak = peak
+        self.haptic_count += 1
+        now = time.monotonic()
+        if peak >= self.haptic_peak_hold:
+            self.haptic_peak_hold = peak
+            self._haptic_peak_time = now
+        elif now - self._haptic_peak_time > 1.5:
+            # Slow decay
+            self.haptic_peak_hold = max(self.haptic_peak_hold - 0.01, peak)
+
         seq = self._haptic_seq
         REPORT_ID = 0x32
         payload_size = 136  # 141 - 1 report_id - 4 crc
@@ -618,6 +634,16 @@ class DS5ClientGUI:
 
         ds5_frame.columnconfigure(1, weight=1)
         ds5_frame.columnconfigure(3, weight=1)
+
+        # Haptic Peak Meter
+        haptic_frame = ttk.LabelFrame(tab_status, text='Haptic Audio', padding=8)
+        haptic_frame.pack(fill='x', pady=(0, 8))
+
+        self.lbl_haptic = ttk.Label(haptic_frame, text='No data')
+        self.lbl_haptic.pack(anchor='w')
+
+        self.peak_canvas = tk.Canvas(haptic_frame, height=24, bg='#1a1a1a', highlightthickness=0)
+        self.peak_canvas.pack(fill='x', pady=(4, 0))
 
         # === Tab 2: Config ===
         tab_config = ttk.Frame(notebook, padding=10)
@@ -741,7 +767,47 @@ class DS5ClientGUI:
             for lbl in self.hw_labels.values():
                 lbl.config(text='-')
 
-        self.root.after(500, self._update_loop)
+        # Haptic peak meter
+        if self.client.haptic_count > 0:
+            rate = self.client.haptic_count / max(1, time.monotonic() - self.client._rate_time)
+            self.lbl_haptic.config(
+                text=f'Packets: {self.client.haptic_count}  |  '
+                     f'Peak: {self.client.haptic_peak:.3f}  |  '
+                     f'Hold: {self.client.haptic_peak_hold:.3f}')
+            self._draw_peak_meter()
+        else:
+            self.lbl_haptic.config(text='No haptic data')
+
+        self.root.after(50, self._update_loop)
+
+    def _draw_peak_meter(self):
+        cv = self.peak_canvas
+        cv.delete('all')
+        w = cv.winfo_width() or 480
+        h = cv.winfo_height() or 24
+
+        # Current level bar
+        level = min(self.client.haptic_peak, 1.0)
+        bar_w = int(level * w)
+        if level < 0.5:
+            color = '#00cc44'
+        elif level < 0.8:
+            color = '#cccc00'
+        else:
+            color = '#cc3300'
+        if bar_w > 0:
+            cv.create_rectangle(0, 0, bar_w, h, fill=color, outline='')
+
+        # Peak hold line
+        hold = min(self.client.haptic_peak_hold, 1.0)
+        hold_x = int(hold * w)
+        if hold_x > 0:
+            cv.create_line(hold_x, 0, hold_x, h, fill='white', width=2)
+
+        # Scale markers
+        for pct in (0.25, 0.5, 0.75):
+            x = int(pct * w)
+            cv.create_line(x, h - 4, x, h, fill='#444444')
 
     def _auto_connect(self):
         def do():

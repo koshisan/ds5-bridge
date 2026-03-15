@@ -85,6 +85,10 @@ class DS5Server:
         self._handoff_status = 'starting...'
         self.last_peak = 0.0
         self.send_until = 0.0
+        self.wave_source = None  # last raw s16 block (pre-resample)
+        self.wave_output = None  # last u8 block (post-convert)
+        self.source_peak = 0.0
+        self.output_peak = 0.0
 
     # --- Shared Memory ---
     def read_shared_status(self):
@@ -359,11 +363,23 @@ class DS5Server:
             if target_len > 0:
                 left_ds = resample(left, target_len)
                 right_ds = resample(right, target_len)
+
+                # Capture waveform for visualization
+                self.wave_source = left[:64].copy()
+                self.source_peak = float(np.max(np.abs(left))) / 32768.0
+
+                u8_block = []
                 for i in range(target_len):
                     l_s16 = int(np.clip(left_ds[i], -32768, 32767))
                     r_s16 = int(np.clip(right_ds[i], -32768, 32767))
-                    sample_buffer.append(self._s16_to_u8(l_s16))
-                    sample_buffer.append(self._s16_to_u8(r_s16))
+                    l_u8 = self._s16_to_u8(l_s16)
+                    r_u8 = self._s16_to_u8(r_s16)
+                    sample_buffer.append(l_u8)
+                    sample_buffer.append(r_u8)
+                    u8_block.append(l_u8)
+
+                self.wave_output = u8_block[:32]
+                self.output_peak = max(abs(b - 128) for b in u8_block[:32]) / 128.0 if u8_block else 0.0
 
             now = time.time()
             if peak > self.config['threshold']:
@@ -441,7 +457,7 @@ class DS5GUI:
         self.server = DS5Server()
         self.root = tk.Tk()
         self.root.title("DS5 Bridge Server")
-        self.root.geometry("580x560")
+        self.root.geometry("580x680")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._build_ui()
@@ -552,6 +568,20 @@ class DS5GUI:
         ttk.Checkbutton(cap_frame, text="Auto-Start", variable=self.auto_capture_var,
                        command=lambda: self._save_auto('auto_capture', self.auto_capture_var.get())).grid(row=0, column=3, padx=10)
 
+        # --- Waveform Monitor ---
+        wave_frame = ttk.LabelFrame(self.root, text="Waveform Monitor", padding=5)
+        wave_frame.pack(fill='x', padx=10, pady=5)
+
+        wave_labels = ttk.Frame(wave_frame)
+        wave_labels.pack(fill='x')
+        self.lbl_source_peak = ttk.Label(wave_labels, text="Source: -", foreground='gray')
+        self.lbl_source_peak.pack(side='left')
+        self.lbl_output_peak = ttk.Label(wave_labels, text="Output: -", foreground='gray')
+        self.lbl_output_peak.pack(side='right')
+
+        self.wave_canvas = tk.Canvas(wave_frame, height=80, bg='#1a1a1a', highlightthickness=0)
+        self.wave_canvas.pack(fill='x', pady=(4, 0))
+
         # --- Bottom ---
         bot_frame = ttk.Frame(self.root, padding=10)
         bot_frame.pack(fill='x', padx=10)
@@ -602,7 +632,49 @@ class DS5GUI:
         if self._update_count % 5 == 0:
             self._refresh_drivers()
 
-        self.root.after(1000, self._update_loop)
+        # Waveform
+        self._draw_waveform()
+        self.lbl_source_peak.config(text=f"Source: {self.server.source_peak:.4f}")
+        self.lbl_output_peak.config(text=f"Output: {self.server.output_peak:.3f}")
+
+        self.root.after(100, self._update_loop)
+
+    def _draw_waveform(self):
+        cv = self.wave_canvas
+        cv.delete('all')
+        w = cv.winfo_width() or 550
+        h = cv.winfo_height() or 80
+        mid = h // 2
+
+        # Center line
+        cv.create_line(0, mid, w, mid, fill='#333333')
+
+        # Source waveform (s16, blue) - top half reference
+        src = self.server.wave_source
+        if src is not None and len(src) > 1:
+            import numpy as np
+            points = []
+            n = min(len(src), 64)
+            for i in range(n):
+                x = int(i * w / n)
+                y = mid - int((float(src[i]) / 32768.0) * mid * 0.9)
+                points.append((x, y))
+            if len(points) >= 2:
+                flat = [coord for pt in points for coord in pt]
+                cv.create_line(*flat, fill='#3366cc', width=1)
+
+        # Output waveform (u8, green) - centered at 128
+        out = self.server.wave_output
+        if out and len(out) > 1:
+            points = []
+            n = len(out)
+            for i in range(n):
+                x = int(i * w / n)
+                y = mid - int(((out[i] - 128) / 128.0) * mid * 0.9)
+                points.append((x, y))
+            if len(points) >= 2:
+                flat = [coord for pt in points for coord in pt]
+                cv.create_line(*flat, fill='#33cc66', width=2)
 
     def _driver_action(self, hwid, enable):
         def do():
