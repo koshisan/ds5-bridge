@@ -724,18 +724,19 @@ class DS5Client:
                     try:
                         gain = self.config.get('haptic_gain', 2.0)
                         n_samples = len(raw_s16) // 4
+                        if self.haptic_count % 100 == 0:
+                            # Log every 100th packet
+                            l0 = int.from_bytes(raw_s16[0:2], 'little', signed=True)
+                            self.log(f'USB audio: gain={gain:.1f} samples={n_samples} raw_l0={l0} gained={int(l0*gain)}')
                         if self._usb_channels == 4:
                             out = bytearray(n_samples * 8)
                             for i in range(n_samples):
                                 l = int.from_bytes(raw_s16[i*4:i*4+2], 'little', signed=True)
                                 r = int.from_bytes(raw_s16[i*4+2:i*4+4], 'little', signed=True)
-                                lb = l.to_bytes(2, 'little', signed=True)
-                                rb = r.to_bytes(2, 'little', signed=True)
-                                # ch1+2 = speaker audio, ch3+4 = haptic (both get same data)
-                                out[i*8:i*8+2] = lb
-                                out[i*8+2:i*8+4] = rb
-                                out[i*8+4:i*8+6] = lb
-                                out[i*8+6:i*8+8] = rb
+                                l = max(-32768, min(32767, int(l * gain)))
+                                r = max(-32768, min(32767, int(r * gain)))
+                                out[i*8+4:i*8+6] = l.to_bytes(2, 'little', signed=True)
+                                out[i*8+6:i*8+8] = r.to_bytes(2, 'little', signed=True)
                             self._usb_audio_stream.write(bytes(out))
                         else:
                             out = bytearray(n_samples * 4)
