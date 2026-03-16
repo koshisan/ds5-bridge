@@ -31,20 +31,40 @@ def send_haptic(audio):
     dev.write(report)
     seq = (seq + 1) & 0x0F
 
-freq = float(sys.argv[1]) if len(sys.argv) > 1 else 200.0
-duration = float(sys.argv[2]) if len(sys.argv) > 2 else 5.0
-amplitude = int(sys.argv[3]) if len(sys.argv) > 3 else 127
+import wave
+import numpy as np
+from scipy.signal import resample_poly
+
+wavfile = sys.argv[1] if len(sys.argv) > 1 else 'haptics_test.wav'
+gain = float(sys.argv[2]) if len(sys.argv) > 2 else 1.0
 
 TARGET_INTERVAL = 1.0 / 93.75  # 10.67ms
-total_samples = int(3000 * duration)
-all_s8 = bytearray(total_samples * 2)
-for i in range(total_samples):
-    val = int(amplitude * math.sin(2 * math.pi * freq * i / 3000.0))
-    val = max(-128, min(127, val))
-    all_s8[i*2] = val & 0xFF
-    all_s8[i*2+1] = val & 0xFF
 
-print(f"Sine {freq}Hz S8, {duration}s, adaptive timing")
+wf = wave.open(wavfile, 'rb')
+rate = wf.getframerate()
+channels = wf.getnchannels()
+raw = wf.readframes(wf.getnframes())
+wf.close()
+
+samples = np.frombuffer(raw, dtype=np.int16).reshape(-1, channels)
+left = samples[:, 0].astype(np.float64)
+right = samples[:, 1].astype(np.float64) if channels >= 2 else left.copy()
+
+# Resample to 3kHz
+target_len = int(len(left) * 3000 / rate)
+left_3k = resample_poly(left, 3000, rate)[:target_len]
+right_3k = resample_poly(right, 3000, rate)[:target_len]
+
+# S16 -> S8 with gain
+all_s8 = bytearray(target_len * 2)
+for i in range(target_len):
+    l = int(np.clip(left_3k[i] * gain / 256.0, -128, 127))
+    r = int(np.clip(right_3k[i] * gain / 256.0, -128, 127))
+    all_s8[i*2] = l & 0xFF
+    all_s8[i*2+1] = r & 0xFF
+
+duration = target_len / 3000.0
+print(f"WAV: {wavfile}, {rate}Hz -> 3kHz, {target_len} samples ({duration:.1f}s), gain={gain}")
 
 # Phase 1: measure average write time
 print("Measuring write timing...")
