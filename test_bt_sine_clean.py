@@ -41,8 +41,8 @@ all_s8 = bytearray(total_samples * 2)  # stereo
 for i in range(total_samples):
     val = int(amplitude * math.sin(2 * math.pi * freq * i / 3000.0))
     val = max(-128, min(127, val))
-    all_s8[i*2] = val
-    all_s8[i*2+1] = val
+    all_s8[i*2] = val & 0xFF
+    all_s8[i*2+1] = val & 0xFF
 
 print(f"Sine {freq}Hz, amplitude {amplitude}, {duration}s")
 print(f"{total_samples} samples at 3kHz, {total_samples//32} packets")
