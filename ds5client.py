@@ -585,7 +585,7 @@ class DS5Client:
     def _update_peak(self, audio_data):
         """Update waveform + peak meter."""
         self.haptic_waveform = list(audio_data[:64])
-        peak = max(abs(b - 128) for b in audio_data[:64]) / 128.0
+        peak = max(abs(((b + 128) % 256) - 128) for b in audio_data[:64]) / 128.0
         self.haptic_peak = peak
         self.haptic_count += 1
         now = time.monotonic()
@@ -619,16 +619,17 @@ class DS5Client:
             left_ds = resample_poly(left, 32, n)[:32]
             right_ds = resample_poly(right, 32, n)[:32]
         gain = self.config.get('haptic_gain', 2.0)
-        # Apply gain, then quantize s16 -> u8 with TPDF dithering
+        # Apply gain, then quantize s16 -> s8 with TPDF dithering
+        # DS5 haptic format is S8 (signed, center=0), NOT U8
         dither = np.random.triangular(-1, 0, 1, size=32)
         audio = bytearray(64)
         for i in range(32):
             l_f = left_ds[i] * gain / 256.0 + dither[i]
             r_f = right_ds[i] * gain / 256.0 + dither[i]
-            l_out = int(np.clip(round(l_f), -128, 127)) + 128
-            r_out = int(np.clip(round(r_f), -128, 127)) + 128
-            audio[i*2] = l_out & 0xFF
-            audio[i*2+1] = r_out & 0xFF
+            l_s8 = int(np.clip(round(l_f), -128, 127))
+            r_s8 = int(np.clip(round(r_f), -128, 127))
+            audio[i*2] = l_s8 & 0xFF
+            audio[i*2+1] = r_s8 & 0xFF
         return audio
 
     def _haptic_send_loop(self):

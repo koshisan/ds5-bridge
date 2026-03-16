@@ -38,11 +38,11 @@ def send_haptic(audio_64bytes):
 def silence():
     return bytes(64)  # all 128? no, all 0 = center... wait
     # u8 center = 128
-    return bytes([128] * 64)
+    return bytes(64)
 
 def constant(val):
     """All 32 stereo samples = same value."""
-    return bytes([val] * 64)
+    return bytes([val & 0xFF] * 64)
 
 def ramp_up():
     """Ramp from 128 to 255 over 32 samples."""

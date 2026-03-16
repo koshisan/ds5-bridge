@@ -59,17 +59,17 @@ left_3k = resample(left, target_samples)
 right_3k = resample(right, target_samples)
 
 # Convert s16 -> u8 with gain
-def s16_to_u8(val, g):
-    return int(np.clip(int(val * g) >> 8, -128, 127)) + 128
+def s16_to_s8(val, g):
+    return int(np.clip(int(val * g) >> 8, -128, 127))
 
-u8_data = bytearray()
+s8_data = bytearray()
 for i in range(target_samples):
     l = int(np.clip(left_3k[i], -32768, 32767))
     r = int(np.clip(right_3k[i], -32768, 32767))
-    u8_data.append(s16_to_u8(l, gain))
-    u8_data.append(s16_to_u8(r, gain))
+    s8_data.append(s16_to_s8(l, gain))
+    s8_data.append(s16_to_s8(r, gain))
 
-print(f"Output: {len(u8_data)} bytes ({len(u8_data)/2} stereo samples)")
+print(f"Output: {len(s8_data)} bytes ({len(s8_data)/2} stereo samples)")
 print(f"Gain: x{gain}")
 
 # Find DS5
@@ -107,7 +107,7 @@ packets = 0
 print(f"\nPlaying... ({target_samples/3000:.1f}s)")
 next_ns = time.monotonic_ns()
 
-while offset + 64 <= len(u8_data):
+while offset + 64 <= len(s8_data):
     # Wait for next tick
     next_ns += INTERVAL_NS
     now = time.monotonic_ns()
@@ -117,7 +117,7 @@ while offset + 64 <= len(u8_data):
     while time.monotonic_ns() < next_ns:
         pass
 
-    audio = bytes(u8_data[offset:offset+64])
+    audio = bytes(s8_data[offset:offset+64])
     offset += 64
 
     pkt_0x11 = bytes([

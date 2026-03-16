@@ -37,12 +37,12 @@ amplitude = int(sys.argv[3]) if len(sys.argv) > 3 else 127
 
 # Pre-generate entire signal at 3kHz
 total_samples = int(3000 * duration)
-all_u8 = bytearray(total_samples * 2)  # stereo
+all_s8 = bytearray(total_samples * 2)  # stereo
 for i in range(total_samples):
-    val = int(128 + amplitude * math.sin(2 * math.pi * freq * i / 3000.0))
-    val = max(0, min(255, val))
-    all_u8[i*2] = val
-    all_u8[i*2+1] = val
+    val = int(amplitude * math.sin(2 * math.pi * freq * i / 3000.0))
+    val = max(-128, min(127, val))
+    all_s8[i*2] = val
+    all_s8[i*2+1] = val
 
 print(f"Sine {freq}Hz, amplitude {amplitude}, {duration}s")
 print(f"{total_samples} samples at 3kHz, {total_samples//32} packets")
@@ -52,8 +52,8 @@ print(f"Samples/cycle: {3000/freq:.1f}")
 offset = 0
 packets = 0
 start = time.perf_counter()
-while offset + 64 <= len(all_u8):
-    send_haptic(bytes(all_u8[offset:offset+64]))
+while offset + 64 <= len(all_s8):
+    send_haptic(bytes(all_s8[offset:offset+64]))
     offset += 64
     packets += 1
 elapsed = time.perf_counter() - start
