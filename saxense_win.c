@@ -1,6 +1,4 @@
-// SAxense Windows Port - DualSense Haptics over Bluetooth
-// Based on SAxense by Sdore (https://apps.sdore.me/SAxense)
-
+// SAxense Windows Port v3 - correct BT report size
 #include <windows.h>
 #include <hidsdi.h>
 #include <setupapi.h>
@@ -38,6 +36,7 @@ static uint8_t *seq_ptr;
 static HANDLE hDevice = INVALID_HANDLE_VALUE;
 static FILE *input_file = NULL;
 static volatile int running = 1;
+static DWORD bt_report_size = 0;
 
 static HANDLE find_ds5_bt(void) {
     GUID hidGuid;
@@ -62,7 +61,6 @@ static HANDLE find_ds5_bt(void) {
         HANDLE h = CreateFile(detail->DevicePath, GENERIC_READ | GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
         free(detail);
-
         if (h == INVALID_HANDLE_VALUE) continue;
 
         HIDD_ATTRIBUTES attrs;
@@ -74,7 +72,10 @@ static HANDLE find_ds5_bt(void) {
                     HIDP_CAPS caps;
                     HidP_GetCaps(ppd, &caps);
                     HidD_FreePreparsedData(ppd);
+                    fprintf(stderr, "  InputReportByteLength=%u OutputReportByteLength=%u\n",
+                            caps.InputReportByteLength, caps.OutputReportByteLength);
                     if (caps.InputReportByteLength > 64) {
+                        bt_report_size = caps.OutputReportByteLength;
                         SetupDiDestroyDeviceInfoList(devInfo);
                         return h;
                     }
@@ -95,66 +96,58 @@ static void CALLBACK timer_proc(UINT uTimerID, UINT uMsg, DWORD_PTR dwUser,
 
     (*seq_ptr)++;
 
-    // CRC over report_id + payload (everything except last 4 bytes)
+    // CRC over report_id + payload (first 137 bytes)
     uint32_t crc = crc32_calc(report_buf, REPORT_SIZE - 4);
     memcpy(report_buf + REPORT_SIZE - 4, &crc, 4);
 
-    { BOOLEAN ok = HidD_SetOutputReport(hDevice, report_buf, REPORT_SIZE); if (!ok) { static int errcnt = 0; if (errcnt++ < 5) fprintf(stderr, "SetOutputReport failed: %lu\n", GetLastError()); } }
+    // Send in a buffer sized to OutputReportByteLength
+    uint8_t *send_buf = (uint8_t*)calloc(bt_report_size, 1);
+    memcpy(send_buf, report_buf, REPORT_SIZE);
+    BOOLEAN ok = HidD_SetOutputReport(hDevice, send_buf, bt_report_size);
+    if (!ok) {
+        static int errcnt = 0;
+        if (errcnt++ < 5) fprintf(stderr, "SetOutputReport failed: %lu (size=%lu)\n", GetLastError(), bt_report_size);
+    }
+    free(send_buf);
 }
 
 int main(int argc, char* argv[]) {
-    fprintf(stderr, "SAxense Windows Port\n");
+    fprintf(stderr, "SAxense Windows Port v3\n");
 
-    // Input: file argument or stdin
     if (argc > 1) {
         input_file = fopen(argv[1], "rb");
-        if (!input_file) {
-            fprintf(stderr, "Cannot open: %s\n", argv[1]);
-            return 1;
-        }
+        if (!input_file) { fprintf(stderr, "Cannot open: %s\n", argv[1]); return 1; }
         fprintf(stderr, "Reading from: %s\n", argv[1]);
     } else {
-        _setmode(_fileno(stdin), 0x8000); // _O_BINARY
+        _setmode(_fileno(stdin), 0x8000);
         input_file = stdin;
         fprintf(stderr, "Reading from stdin\n");
     }
 
     fprintf(stderr, "Finding DS5 (BT)...\n");
     hDevice = find_ds5_bt();
-    if (hDevice == INVALID_HANDLE_VALUE) {
-        fprintf(stderr, "No DS5 BT device found!\n");
-        return 1;
-    }
-    fprintf(stderr, "DS5 found!\n");
+    if (hDevice == INVALID_HANDLE_VALUE) { fprintf(stderr, "No DS5 BT!\n"); return 1; }
+    fprintf(stderr, "DS5 found! OutputReportByteLength=%lu\n", bt_report_size);
 
-    // Build report template
     memset(report_buf, 0, sizeof(report_buf));
-    report_buf[0] = REPORT_ID;  // report_id
-    report_buf[1] = 0;          // tag_seq
-
-    // Packet 0x11 at offset 2
-    report_buf[2] = (0x11 & 0x3F) | (1 << 7);  // pid=0x11, sized=1
-    report_buf[3] = 7;  // length
+    report_buf[0] = REPORT_ID;
+    report_buf[1] = 0;
+    report_buf[2] = (0x11 & 0x3F) | (1 << 7);
+    report_buf[3] = 7;
     report_buf[4] = 0xFE;
-    report_buf[10] = 0xFF;  // seq byte init
+    report_buf[10] = 0xFF;
+    report_buf[11] = (0x12 & 0x3F) | (1 << 7);
+    report_buf[12] = SAMPLE_SIZE;
 
-    // Packet 0x12 header at offset 11
-    report_buf[11] = (0x12 & 0x3F) | (1 << 7);  // pid=0x12, sized=1
-    report_buf[12] = SAMPLE_SIZE;  // length
-
-    seq_ptr = &report_buf[10];     // pkt_0x11 data[5]
-    sample_ptr = &report_buf[13];  // audio data starts here
+    seq_ptr = &report_buf[10];
+    sample_ptr = &report_buf[13];
 
     timeBeginPeriod(1);
-
-    UINT interval_ms = (SAMPLE_SIZE * 1000) / (SAMPLE_RATE * 2);  // ~10ms
-    fprintf(stderr, "Timer: %u ms (~%.1f Hz)\n", interval_ms, 1000.0 / interval_ms);
+    UINT interval_ms = (SAMPLE_SIZE * 1000) / (SAMPLE_RATE * 2);
+    fprintf(stderr, "Timer: %u ms\n", interval_ms);
 
     MMRESULT timer = timeSetEvent(interval_ms, 1, timer_proc, 0, TIME_PERIODIC);
-    if (!timer) {
-        fprintf(stderr, "Timer failed!\n");
-        return 1;
-    }
+    if (!timer) { fprintf(stderr, "Timer failed!\n"); return 1; }
 
     fprintf(stderr, "Playing...\n");
     while (running) Sleep(100);
@@ -162,11 +155,13 @@ int main(int argc, char* argv[]) {
     timeKillEvent(timer);
     timeEndPeriod(1);
 
-    // Silence
     memset(sample_ptr, 0, SAMPLE_SIZE);
     uint32_t crc = crc32_calc(report_buf, REPORT_SIZE - 4);
     memcpy(report_buf + REPORT_SIZE - 4, &crc, 4);
-    { BOOLEAN ok = HidD_SetOutputReport(hDevice, report_buf, REPORT_SIZE); if (!ok) { static int errcnt = 0; if (errcnt++ < 5) fprintf(stderr, "SetOutputReport failed: %lu\n", GetLastError()); } }
+    uint8_t *send_buf = (uint8_t*)calloc(bt_report_size, 1);
+    memcpy(send_buf, report_buf, REPORT_SIZE);
+    HidD_SetOutputReport(hDevice, send_buf, bt_report_size);
+    free(send_buf);
 
     CloseHandle(hDevice);
     if (input_file != stdin) fclose(input_file);
