@@ -46,7 +46,7 @@ while offset + SAMPLE_SIZE * num_blocks <= len(raw):
 
     payload = pkt_0x11 + audio_packets
     # Pad to 136 bytes (REPORT_SIZE - 1 report_id - 4 crc)
-    payload = payload.ljust(547 - 1 - 4, b'\x00')
+    payload = payload.ljust(547 - 1 - 1 - 4, b'\x00')
 
     tag_seq = (seq & 0x0F) << 4
     body = bytes([tag_seq]) + payload
