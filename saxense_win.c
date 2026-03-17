@@ -57,8 +57,8 @@ static HANDLE find_ds5_bt(void) {
                 HIDP_CAPS caps;
                 HidP_GetCaps(ppd, &caps);
                 HidD_FreePreparsedData(ppd);
-                fprintf(stderr, "  In=%u Out=%u Feature=%u\n", caps.InputReportByteLength, caps.OutputReportByteLength, caps.FeatureReportByteLength);
-                if (caps.InputReportByteLength > 64) {
+                fprintf(stderr, "  Path: %s\n  In=%u Out=%u Feature=%u\n", detail->DevicePath, caps.InputReportByteLength, caps.OutputReportByteLength, caps.FeatureReportByteLength);
+                if (caps.InputReportByteLength > 64) { fprintf(stderr, "  MATCH!\n");
                     out_report_len = caps.OutputReportByteLength;
                     SetupDiDestroyDeviceInfoList(devInfo);
                     return h;
