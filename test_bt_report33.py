@@ -37,15 +37,18 @@ offset = 0
 packets = 0
 
 while offset + SAMPLE_SIZE <= len(raw):
-    audio = raw[offset:offset+SAMPLE_SIZE]
-    offset += SAMPLE_SIZE
-
     pkt_0x11 = bytes([
         (0x11 & 0x3F) | (1 << 7), 7,
         0xFE, 0, 0, 0, 0, seq & 0xFF, 0
     ])
-    pkt_0x12 = bytes([(0x12 & 0x3F) | (1 << 7), SAMPLE_SIZE]) + audio
-    payload = (pkt_0x11 + pkt_0x12).ljust(payload_size, b'\x00')
+    # Fill as many audio blocks as fit in payload
+    audio_data = b''
+    max_audio_bytes = payload_size - 9  # minus pkt_0x11
+    while len(audio_data) + 2 + SAMPLE_SIZE <= max_audio_bytes and offset + SAMPLE_SIZE <= len(raw):
+        audio = raw[offset:offset+SAMPLE_SIZE]
+        offset += SAMPLE_SIZE
+        audio_data += bytes([(0x12 & 0x3F) | (1 << 7), SAMPLE_SIZE]) + audio
+    payload = (pkt_0x11 + audio_data).ljust(payload_size, b'\x00')
 
     tag_seq = (seq & 0x0F) << 4
     body = bytes([tag_seq]) + payload
