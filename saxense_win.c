@@ -98,13 +98,16 @@ static void do_write(void) {
 }
 
 static void CALLBACK timer_proc(UINT uTimerID, UINT uMsg, DWORD_PTR dwUser, DWORD_PTR dw1, DWORD_PTR dw2) {
-    // Read first 64 bytes into first audio block (offset 13)
-    size_t n = fread(sample_ptr, 1, SAMPLE_SIZE, input_file);
-    if (n == 0) { running = 0; return; }
-    if (n < SAMPLE_SIZE) memset(sample_ptr + n, 0, SAMPLE_SIZE - n);
-    // Read second 64 bytes into second audio block (offset 79)
-    size_t n2 = fread(report_buf + 79, 1, SAMPLE_SIZE, input_file);
-    if (n2 < SAMPLE_SIZE) memset(report_buf + 79 + n2, 0, SAMPLE_SIZE - n2);
+    // Read 4 audio blocks
+    audio_block_count = 0;
+    for (int i = 0; i < 4; i++) {
+        size_t n = fread(audio_blocks[i], 1, SAMPLE_SIZE, input_file);
+        if (n == 0 && i == 0) { running = 0; return; }
+        if (n > 0) audio_block_count++;
+        if (n < SAMPLE_SIZE) { memset(audio_blocks[i] + n, 0, SAMPLE_SIZE - n); break; }
+    }
+    // First block goes into report_buf
+    memcpy(sample_ptr, audio_blocks[0], SAMPLE_SIZE);
 
     (*seq_ptr)++;
 
@@ -147,9 +150,9 @@ int main(int argc, char* argv[]) {
     report_buf[12] = SAMPLE_SIZE;
     seq_ptr = &report_buf[10];
     sample_ptr = &report_buf[13];
-    // Second pkt_0x12 block starting right after first audio (13+64=77)
-    report_buf[77] = (0x12 & 0x3F) | (1 << 7);  // pid=0x12, sized=1
-    report_buf[78] = SAMPLE_SIZE;  // length=64
+    // Set up 4 pkt_0x12 audio blocks in the padded 547-byte buffer
+    // Block 1: offset 13 (already set up in report_buf)
+    // Blocks 2-4 will be set up in write_buf during do_write
 
     timeBeginPeriod(1);
     
