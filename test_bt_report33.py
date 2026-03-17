@@ -29,7 +29,7 @@ report_sizes = {
     0x35: 334, 0x36: 398, 0x37: 462, 0x38: 526, 0x39: 547
 }
 report_size = report_sizes.get(report_id, 142)
-payload_size = report_size - 1 - 4  # minus ID and CRC
+payload_size = report_size - 1 - 1 - 4  # minus ID and CRC
 print(f"Report 0x{report_id:02X}: {report_size} bytes, payload {payload_size}")
 
 seq = 0
