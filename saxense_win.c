@@ -13,7 +13,7 @@
 #pragma comment(lib, "setupapi.lib")
 #pragma comment(lib, "winmm.lib")
 
-#define REPORT_SIZE   141
+#define REPORT_SIZE   142
 #define REPORT_ID     0x32
 #define SAMPLE_SIZE   64
 #define DS5_VID       0x054C
