@@ -115,7 +115,7 @@ static void CALLBACK timer_proc(UINT uTimerID, UINT uMsg, DWORD_PTR dwUser,
 
     // Write report
     DWORD written;
-    WriteFile(hDevice, &report, sizeof(report), &written, NULL);
+    HidD_SetOutputReport(hDevice, &report, sizeof(report));
 }
 
 int main(int argc, char* argv[]) {
@@ -182,7 +182,7 @@ int main(int argc, char* argv[]) {
     memset(sample, 0, SAMPLE_SIZE);
     report.crc = crc32((uint8_t*)&report, 1 + sizeof(report.payload));
     DWORD written;
-    WriteFile(hDevice, &report, sizeof(report), &written, NULL);
+    HidD_SetOutputReport(hDevice, &report, sizeof(report));
 
     CloseHandle(hDevice);
     fprintf(stderr, "Done.\n");
