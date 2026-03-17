@@ -57,6 +57,7 @@ while offset + SAMPLE_SIZE * num_frames <= len(raw):
     # First byte must be Report ID for hidapi
     # Send the combined data (first frame's report ID is already 0x32)
     dev.write(combined)
+    time.sleep(0.01067 * num_frames)
     packets += 1
 
 elapsed = time.perf_counter() - start
