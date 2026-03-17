@@ -73,23 +73,27 @@ static HANDLE find_ds5_bt(void) {
 }
 
 static void do_write(void) {
-    // Copy report into padded buffer (like hidapi)
-    memcpy(write_buf, report_buf, REPORT_SIZE);
-    // Zero-pad rest
-    memset(write_buf + REPORT_SIZE, 0, out_report_len - REPORT_SIZE);
+    // Build BT frame: [0xA2][report_buf...] then write from offset 1
+    // 0xA2 = BT HID transaction header (not actually sent, but needed in buffer for CRC)
+    uint8_t bt_buf[1 + REPORT_SIZE];
+    bt_buf[0] = 0xA2;  // BT header (used for CRC calc, skipped in write)
+    memcpy(bt_buf + 1, report_buf, REPORT_SIZE);
 
     DWORD bytes_written = 0;
-    BOOL res = WriteFile(hDevice, write_buf, out_report_len, &bytes_written, &write_ol);
+    // Write 141 bytes starting from report_buf (skip 0xA2 header)
+    BOOL res = WriteFile(hDevice, report_buf, REPORT_SIZE, &bytes_written, &write_ol);
     if (!res) {
         DWORD err = GetLastError();
         if (err == ERROR_IO_PENDING) {
-            // Wait for completion (like hidapi: synchronous write)
             WaitForSingleObject(write_ol.hEvent, 1000);
             GetOverlappedResult(hDevice, &write_ol, &bytes_written, FALSE);
         } else {
             static int errcnt = 0;
-            if (errcnt++ < 5) fprintf(stderr, "WriteFile err=%lu\n", err);
+            if (errcnt++ < 10) fprintf(stderr, "WriteFile err=%lu written=%lu\n", err, bytes_written);
         }
+    } else {
+        static int ok_count = 0;
+        if (ok_count++ < 3) fprintf(stderr, "WriteFile OK written=%lu\n", bytes_written);
     }
 }
 
