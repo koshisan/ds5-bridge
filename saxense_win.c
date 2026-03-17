@@ -98,9 +98,13 @@ static void do_write(void) {
 }
 
 static void CALLBACK timer_proc(UINT uTimerID, UINT uMsg, DWORD_PTR dwUser, DWORD_PTR dw1, DWORD_PTR dw2) {
+    // Read first 64 bytes into first audio block (offset 13)
     size_t n = fread(sample_ptr, 1, SAMPLE_SIZE, input_file);
     if (n == 0) { running = 0; return; }
     if (n < SAMPLE_SIZE) memset(sample_ptr + n, 0, SAMPLE_SIZE - n);
+    // Read second 64 bytes into second audio block (offset 79)
+    size_t n2 = fread(report_buf + 79, 1, SAMPLE_SIZE, input_file);
+    if (n2 < SAMPLE_SIZE) memset(report_buf + 79 + n2, 0, SAMPLE_SIZE - n2);
 
     (*seq_ptr)++;
 
@@ -143,6 +147,9 @@ int main(int argc, char* argv[]) {
     report_buf[12] = SAMPLE_SIZE;
     seq_ptr = &report_buf[10];
     sample_ptr = &report_buf[13];
+    // Second pkt_0x12 block starting right after first audio (13+64=77)
+    report_buf[77] = (0x12 & 0x3F) | (1 << 7);  // pid=0x12, sized=1
+    report_buf[78] = SAMPLE_SIZE;  // length=64
 
     timeBeginPeriod(1);
     
