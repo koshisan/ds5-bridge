@@ -46,12 +46,16 @@ start = time.perf_counter()
 
 while offset + SAMPLE_SIZE * num_frames <= len(raw):
     # Build concatenated frames
+    corrupt_after_first = '--corrupt' in sys.argv
     combined = b''
     for i in range(num_frames):
         audio = raw[offset:offset+SAMPLE_SIZE]
         offset += SAMPLE_SIZE
         frame = build_frame(audio, seq)
         seq = (seq + 1) & 0x0F
+        if corrupt_after_first and i > 0:
+            # Corrupt CRC (last 4 bytes)
+            frame = frame[:-4] + b'\xDE\xAD\xBE\xEF'
         combined += frame
 
     # First byte must be Report ID for hidapi
