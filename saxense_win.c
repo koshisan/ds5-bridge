@@ -6,6 +6,8 @@
 #include <hidsdi.h>
 #include <setupapi.h>
 #include <stdio.h>
+#include <fcntl.h>
+#include <io.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,11 +33,12 @@ static uint32_t crc32(const uint8_t* data, size_t size) {
     return ~crc;
 }
 
-typedef struct __attribute__((packed)) {
+typedef struct  {
     uint8_t pid_flags;  // pid(6) | unk(1) | sized(1)
     uint8_t length;
     uint8_t data[];
 } packet_t;
+#pragma pack(pop)
 
 static struct {
     uint8_t report_id;
@@ -116,7 +119,7 @@ static void CALLBACK timer_proc(UINT uTimerID, UINT uMsg, DWORD_PTR dwUser,
 }
 
 int main(int argc, char* argv[]) {
-    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdin), 0x8000);
 
     fprintf(stderr, "SAxense Windows Port\n");
     fprintf(stderr, "Finding DS5 (BT)...\n");
