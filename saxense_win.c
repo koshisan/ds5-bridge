@@ -1,4 +1,4 @@
-// SAxense Windows Port v4 - 547 byte WriteFile
+// SAxense Windows Port v5 - persistent OVERLAPPED like hidapi
 #include <windows.h>
 #include <hidsdi.h>
 #include <setupapi.h>
@@ -26,8 +26,10 @@ static uint32_t crc32_calc(const uint8_t* data, size_t size) {
 }
 
 static uint8_t report_buf[REPORT_SIZE];
+static uint8_t *write_buf = NULL;  // padded to output_report_length
 static uint8_t *sample_ptr, *seq_ptr;
 static HANDLE hDevice = INVALID_HANDLE_VALUE;
+static OVERLAPPED write_ol;  // persistent like hidapi
 static FILE *input_file = NULL;
 static volatile int running = 1;
 static DWORD out_report_len = 0;
@@ -57,8 +59,7 @@ static HANDLE find_ds5_bt(void) {
                 HIDP_CAPS caps;
                 HidP_GetCaps(ppd, &caps);
                 HidD_FreePreparsedData(ppd);
-                fprintf(stderr, "  Path: %s\n  In=%u Out=%u Feature=%u\n", detail->DevicePath, caps.InputReportByteLength, caps.OutputReportByteLength, caps.FeatureReportByteLength);
-                if (caps.InputReportByteLength > 64) { fprintf(stderr, "  MATCH!\n");
+                if (caps.InputReportByteLength > 64) {
                     out_report_len = caps.OutputReportByteLength;
                     SetupDiDestroyDeviceInfoList(devInfo);
                     return h;
@@ -71,34 +72,42 @@ static HANDLE find_ds5_bt(void) {
     return INVALID_HANDLE_VALUE;
 }
 
+static void do_write(void) {
+    // Copy report into padded buffer (like hidapi)
+    memcpy(write_buf, report_buf, REPORT_SIZE);
+    // Zero-pad rest
+    memset(write_buf + REPORT_SIZE, 0, out_report_len - REPORT_SIZE);
+
+    DWORD bytes_written = 0;
+    BOOL res = WriteFile(hDevice, write_buf, out_report_len, &bytes_written, &write_ol);
+    if (!res) {
+        DWORD err = GetLastError();
+        if (err == ERROR_IO_PENDING) {
+            // Wait for completion (like hidapi: synchronous write)
+            WaitForSingleObject(write_ol.hEvent, 1000);
+            GetOverlappedResult(hDevice, &write_ol, &bytes_written, FALSE);
+        } else {
+            static int errcnt = 0;
+            if (errcnt++ < 5) fprintf(stderr, "WriteFile err=%lu\n", err);
+        }
+    }
+}
+
 static void CALLBACK timer_proc(UINT uTimerID, UINT uMsg, DWORD_PTR dwUser, DWORD_PTR dw1, DWORD_PTR dw2) {
     size_t n = fread(sample_ptr, 1, SAMPLE_SIZE, input_file);
     if (n == 0) { running = 0; return; }
     if (n < SAMPLE_SIZE) memset(sample_ptr + n, 0, SAMPLE_SIZE - n);
+
     (*seq_ptr)++;
+
     uint32_t crc = crc32_calc(report_buf, REPORT_SIZE - 4);
     memcpy(report_buf + REPORT_SIZE - 4, &crc, 4);
 
-    // Build full-size buffer for BT HID
-
-    OVERLAPPED ol = {0};
-    ol.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
-    DWORD written = 0;
-    BOOL ok = WriteFile(hDevice, report_buf, REPORT_SIZE, &written, &ol);
-    if (!ok) {
-        DWORD err = GetLastError();
-        if (err == ERROR_IO_PENDING) {
-            WaitForSingleObject(ol.hEvent, 100);
-        } else {
-            static int errcnt = 0;
-            if (errcnt++ < 5) fprintf(stderr, "WriteFile err=%lu len=%lu\n", err, out_report_len);
-        }
-    }
-    CloseHandle(ol.hEvent);
+    do_write();
 }
 
 int main(int argc, char* argv[]) {
-    fprintf(stderr, "SAxense Windows Port v4\n");
+    fprintf(stderr, "SAxense Windows Port v5\n");
     if (argc > 1) {
         input_file = fopen(argv[1], "rb");
         if (!input_file) { fprintf(stderr, "Cannot open: %s\n", argv[1]); return 1; }
@@ -106,10 +115,19 @@ int main(int argc, char* argv[]) {
         _setmode(_fileno(stdin), 0x8000);
         input_file = stdin;
     }
-    fprintf(stderr, "Finding DS5 (BT)...\n");
     hDevice = find_ds5_bt();
     if (hDevice == INVALID_HANDLE_VALUE) { fprintf(stderr, "No DS5 BT!\n"); return 1; }
     fprintf(stderr, "DS5 found! OutLen=%lu\n", out_report_len);
+
+    // Allocate padded write buffer (like hidapi)
+    write_buf = (uint8_t*)calloc(out_report_len, 1);
+
+    // Init persistent OVERLAPPED (like hidapi)
+    memset(&write_ol, 0, sizeof(write_ol));
+    write_ol.hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+
+    // Set input buffer size (like hidapi)
+    HidD_SetNumInputBuffers(hDevice, 64);
 
     memset(report_buf, 0, sizeof(report_buf));
     report_buf[0] = REPORT_ID;
@@ -129,7 +147,10 @@ int main(int argc, char* argv[]) {
     while (running) Sleep(100);
     timeKillEvent(timer);
     timeEndPeriod(1);
+
+    CloseHandle(write_ol.hEvent);
     CloseHandle(hDevice);
+    free(write_buf);
     if (input_file != stdin) fclose(input_file);
     fprintf(stderr, "Done.\n");
     return 0;
