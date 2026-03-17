@@ -145,11 +145,11 @@ int main(int argc, char* argv[]) {
     sample_ptr = &report_buf[13];
 
     timeBeginPeriod(1);
-    MMRESULT timer = timeSetEvent(10, 1, timer_proc, 0, TIME_PERIODIC);
-    if (!timer) { fprintf(stderr, "Timer failed!\n"); return 1; }
-    fprintf(stderr, "Playing...\n");
-    while (running) Sleep(100);
-    timeKillEvent(timer);
+    
+    
+    fprintf(stderr, "Playing (main thread loop)...\n");
+    while (running) { timer_proc(0,0,0,0,0); Sleep(10); }
+    
     timeEndPeriod(1);
 
     CloseHandle(write_ol.hEvent);
