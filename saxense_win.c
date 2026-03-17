@@ -101,14 +101,11 @@ static void CALLBACK timer_proc(UINT uTimerID, UINT uMsg, DWORD_PTR dwUser,
     memcpy(report_buf + REPORT_SIZE - 4, &crc, 4);
 
     // Send in a buffer sized to OutputReportByteLength
-    uint8_t *send_buf = (uint8_t*)calloc(bt_report_size, 1);
-    memcpy(send_buf, report_buf, REPORT_SIZE);
-    BOOLEAN ok = HidD_SetOutputReport(hDevice, send_buf, bt_report_size);
+    DWORD written; BOOLEAN ok = WriteFile(hDevice, report_buf, REPORT_SIZE, &written, NULL);
     if (!ok) {
         static int errcnt = 0;
         if (errcnt++ < 5) fprintf(stderr, "SetOutputReport failed: %lu (size=%lu)\n", GetLastError(), bt_report_size);
     }
-    free(send_buf);
 }
 
 int main(int argc, char* argv[]) {
@@ -158,10 +155,7 @@ int main(int argc, char* argv[]) {
     memset(sample_ptr, 0, SAMPLE_SIZE);
     uint32_t crc = crc32_calc(report_buf, REPORT_SIZE - 4);
     memcpy(report_buf + REPORT_SIZE - 4, &crc, 4);
-    uint8_t *send_buf = (uint8_t*)calloc(bt_report_size, 1);
-    memcpy(send_buf, report_buf, REPORT_SIZE);
-    HidD_SetOutputReport(hDevice, send_buf, bt_report_size);
-    free(send_buf);
+    { DWORD w; WriteFile(hDevice, report_buf, REPORT_SIZE, &w, NULL); }
 
     CloseHandle(hDevice);
     if (input_file != stdin) fclose(input_file);
