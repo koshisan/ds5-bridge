@@ -99,7 +99,7 @@ static void CALLBACK timer_proc(UINT uTimerID, UINT uMsg, DWORD_PTR dwUser,
     uint32_t crc = crc32_calc(report_buf, REPORT_SIZE - 4);
     memcpy(report_buf + REPORT_SIZE - 4, &crc, 4);
 
-    HidD_SetOutputReport(hDevice, report_buf, REPORT_SIZE);
+    { BOOLEAN ok = HidD_SetOutputReport(hDevice, report_buf, REPORT_SIZE); if (!ok) { static int errcnt = 0; if (errcnt++ < 5) fprintf(stderr, "SetOutputReport failed: %lu\n", GetLastError()); } }
 }
 
 int main(int argc, char* argv[]) {
@@ -166,7 +166,7 @@ int main(int argc, char* argv[]) {
     memset(sample_ptr, 0, SAMPLE_SIZE);
     uint32_t crc = crc32_calc(report_buf, REPORT_SIZE - 4);
     memcpy(report_buf + REPORT_SIZE - 4, &crc, 4);
-    HidD_SetOutputReport(hDevice, report_buf, REPORT_SIZE);
+    { BOOLEAN ok = HidD_SetOutputReport(hDevice, report_buf, REPORT_SIZE); if (!ok) { static int errcnt = 0; if (errcnt++ < 5) fprintf(stderr, "SetOutputReport failed: %lu\n", GetLastError()); } }
 
     CloseHandle(hDevice);
     if (input_file != stdin) fclose(input_file);
