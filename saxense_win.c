@@ -59,7 +59,7 @@ static HANDLE find_ds5_bt(void) {
         }
 
         HANDLE h = CreateFile(detail->DevicePath, GENERIC_READ | GENERIC_WRITE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
         free(detail);
         if (h == INVALID_HANDLE_VALUE) continue;
 
@@ -101,10 +101,10 @@ static void CALLBACK timer_proc(UINT uTimerID, UINT uMsg, DWORD_PTR dwUser,
     memcpy(report_buf + REPORT_SIZE - 4, &crc, 4);
 
     // Send in a buffer sized to OutputReportByteLength
-    DWORD written; BOOLEAN ok = WriteFile(hDevice, report_buf, REPORT_SIZE, &written, NULL);
+    OVERLAPPED ol = {0}; ol.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL); DWORD written; BOOLEAN ok = WriteFile(hDevice, report_buf, REPORT_SIZE, &written, &ol); if (!ok && GetLastError() == ERROR_IO_PENDING) { WaitForSingleObject(ol.hEvent, 50); ok = TRUE; } CloseHandle(ol.hEvent);
     if (!ok) {
         static int errcnt = 0;
-        if (errcnt++ < 5) fprintf(stderr, "SetOutputReport failed: %lu (size=%lu)\n", GetLastError(), bt_report_size);
+        if (errcnt++ < 5) fprintf(stderr, "WriteFile failed: %lu (size=%lu)\n", GetLastError(), bt_report_size);
     }
 }
 
