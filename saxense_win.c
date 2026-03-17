@@ -80,13 +80,11 @@ static void CALLBACK timer_proc(UINT uTimerID, UINT uMsg, DWORD_PTR dwUser, DWOR
     memcpy(report_buf + REPORT_SIZE - 4, &crc, 4);
 
     // Build full-size buffer for BT HID
-    uint8_t *buf = (uint8_t*)calloc(out_report_len, 1);
-    memcpy(buf, report_buf, REPORT_SIZE);
 
     OVERLAPPED ol = {0};
     ol.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
     DWORD written = 0;
-    BOOL ok = WriteFile(hDevice, buf, out_report_len, &written, &ol);
+    BOOL ok = WriteFile(hDevice, report_buf, REPORT_SIZE, &written, &ol);
     if (!ok) {
         DWORD err = GetLastError();
         if (err == ERROR_IO_PENDING) {
@@ -97,7 +95,6 @@ static void CALLBACK timer_proc(UINT uTimerID, UINT uMsg, DWORD_PTR dwUser, DWOR
         }
     }
     CloseHandle(ol.hEvent);
-    free(buf);
 }
 
 int main(int argc, char* argv[]) {
