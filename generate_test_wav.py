@@ -30,60 +30,50 @@ def write_wav(filename, left_samples, right_samples):
     print(f"  Written: {filename} ({len(left_samples)} frames, {len(left_samples)/SAMPLE_RATE:.1f}s)")
 
 
-def square_wave_section(amplitude, freq=200, n=SAMPLES_PER_SECTION):
-    """Square wave at given amplitude and frequency."""
-    samples = []
-    half_period = SAMPLE_RATE // (2 * freq)
-    for i in range(n):
-        if (i // half_period) % 2 == 0:
-            samples.append(amplitude)
-        else:
-            samples.append(-amplitude)
-    return samples
-
-
-def silent_section(n=SAMPLES_PER_SECTION):
-    return [0] * n
+def constant_section(value, n=SAMPLES_PER_SECTION):
+    """Constant DC value — motor holds position."""
+    return [value] * n
 
 
 def main():
-    # s16 amplitudes
-    MAX_AMP = 32767
-    MID_AMP = 16384
+    # s16 values: DC levels for haptic motor position
+    MAX_VAL = 32767   # should appear as 0x7f in s8
+    MID_VAL = 16384   # should appear as 0x40 in s8
+    ZERO_VAL = 0      # should appear as 0x00 in s8
 
-    print("Generating test WAVs (200Hz square waves)...\n")
+    print("Generating test WAVs (DC levels for haptic analysis)...\n")
 
-    # 1. Stereo: loud, medium, silent, repeat
+    # 1. Stereo: max, mid, zero, repeat
     print("1. test_pattern_stereo.wav (both channels)")
-    print("   Pattern: 1s LOUD | 1s MEDIUM | 1s SILENT | repeat")
+    print("   Pattern: 1s MAX(7f) | 1s MID(40) | 1s ZERO(00) | repeat")
     pattern = (
-        square_wave_section(MAX_AMP) +
-        square_wave_section(MID_AMP) +
-        silent_section() +
-        square_wave_section(MAX_AMP) +
-        square_wave_section(MID_AMP) +
-        silent_section()
+        constant_section(MAX_VAL) +
+        constant_section(MID_VAL) +
+        constant_section(ZERO_VAL) +
+        constant_section(MAX_VAL) +
+        constant_section(MID_VAL) +
+        constant_section(ZERO_VAL)
     )
     write_wav("test_pattern_stereo.wav", pattern, pattern)
 
     # 2. Left only
     print("\n2. test_pattern_left.wav (left channel only)")
-    print("   Pattern: L=LOUD|MED|SILENT, R=silent")
+    print("   Pattern: L=MAX|MID|ZERO, R=silent")
     left = (
-        square_wave_section(MAX_AMP) +
-        square_wave_section(MID_AMP) +
-        silent_section()
+        constant_section(MAX_VAL) +
+        constant_section(MID_VAL) +
+        constant_section(ZERO_VAL)
     )
-    silent = silent_section(len(left))
+    silent = constant_section(ZERO_VAL, len(left))
     write_wav("test_pattern_left.wav", left, silent)
 
     # 3. Right only
     print("\n3. test_pattern_right.wav (right channel only)")
-    print("   Pattern: L=silent, R=LOUD|MED|SILENT")
+    print("   Pattern: L=silent, R=MAX|MID|ZERO")
     right = (
-        square_wave_section(MAX_AMP) +
-        square_wave_section(MID_AMP) +
-        silent_section()
+        constant_section(MAX_VAL) +
+        constant_section(MID_VAL) +
+        constant_section(ZERO_VAL)
     )
     write_wav("test_pattern_right.wav", silent, right)
 
