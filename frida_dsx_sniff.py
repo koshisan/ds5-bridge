@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Frida-based HID sniffer for DSX.exe
-Hooks at ntdll level to capture ALL writes to HID devices.
+Frida-based sniffer for DSX.exe — DUMP EVERYTHING.
+No filtering, just raw syscall interception.
 
 Usage:
     pip install frida-tools
@@ -15,140 +15,157 @@ import signal
 SCRIPT_CODE = r"""
 'use strict';
 
-const NtWriteFile = Module.getExportByName('ntdll.dll', 'NtWriteFile');
-const NtDeviceIoControlFile = Module.getExportByName('ntdll.dll', 'NtDeviceIoControlFile');
-const NtCreateFile = Module.getExportByName('ntdll.dll', 'NtCreateFile');
-const GetFinalPathNameByHandleW = Module.getExportByName('kernel32.dll', 'GetFinalPathNameByHandleW');
-
-// Also try hooking HidD_ functions directly
-var HidD_SetOutputReport = null;
-var HidD_GetFeature = null;
-var HidD_SetFeature = null;
-try { HidD_SetOutputReport = Module.getExportByName('hid.dll', 'HidD_SetOutputReport'); } catch(e) {}
-try { HidD_GetFeature = Module.getExportByName('hid.dll', 'HidD_GetFeature'); } catch(e) {}
-try { HidD_SetFeature = Module.getExportByName('hid.dll', 'HidD_SetFeature'); } catch(e) {}
-
-const handlePaths = {};
-
-function getPath(h) {
-    const key = h.toString();
-    if (handlePaths[key] !== undefined) return handlePaths[key];
+function toHex(ptr, len) {
     try {
-        const buf = Memory.alloc(520);
-        const fn = new NativeFunction(GetFinalPathNameByHandleW, 'uint32',
-            ['pointer', 'pointer', 'uint32', 'uint32']);
-        const len = fn(h, buf, 260, 0);
-        const path = len > 0 ? buf.readUtf16String() : '';
-        handlePaths[key] = path;
-        return path;
+        var n = len < 64 ? len : 64;
+        var arr = [];
+        for (var i = 0; i < n; i++) {
+            var b = ptr.add(i).readU8();
+            arr.push(('0' + b.toString(16)).slice(-2));
+        }
+        return arr.join(' ');
     } catch(e) {
-        handlePaths[key] = '';
-        return '';
+        return '<err>';
     }
 }
 
-function dumpBytes(ptr, len) {
-    try {
-        const n = Math.min(len, 141);
-        const bytes = Array.from(new Uint8Array(ptr.readByteArray(n)));
-        return bytes.map(b => ('0' + b.toString(16)).slice(-2)).join(' ');
-    } catch(e) {
-        return '<read error>';
-    }
-}
-
-function isHidPath(path) {
-    const p = path.toLowerCase();
-    return p.indexOf('hid') !== -1 || p.indexOf('054c') !== -1 || p.indexOf('0ce6') !== -1;
-}
-
-// NtWriteFile — lowest level file write
-Interceptor.attach(NtWriteFile, {
-    onEnter(args) {
-        // NtWriteFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, Buffer, Length, ...)
-        const handle = args[0];
-        const buf = args[5];
-        const len = args[6].toInt32();
-        const path = getPath(handle);
-        if (isHidPath(path) && len >= 4) {
-            send({ api: 'NtWriteFile', dir: 'OUT', ts: Date.now(), len: len,
-                   path: path, hex: dumpBytes(buf, len) });
-        }
-    }
-});
-
-// NtDeviceIoControlFile — catches DeviceIoControl, HidD_SetOutputReport internals
-Interceptor.attach(NtDeviceIoControlFile, {
-    onEnter(args) {
-        // NtDeviceIoControlFile(FileHandle, Event, ApcRoutine, ApcCtx, IoStatus,
-        //   IoControlCode, InputBuffer, InputBufferLength, OutputBuffer, OutputBufferLength)
-        const handle = args[0];
-        const ioctl = args[5].toInt32() >>> 0;
-        const inBuf = args[6];
-        const inLen = args[7].toInt32();
-        const path = getPath(handle);
-        if (isHidPath(path) && inLen >= 4) {
-            send({ api: 'NtDeviceIoControlFile', dir: 'OUT', ts: Date.now(),
-                   ioctl: '0x' + ioctl.toString(16).padStart(8, '0'),
-                   len: inLen, path: path, hex: dumpBytes(inBuf, inLen) });
-        }
-    }
-});
-
-// HidD_SetOutputReport — if DSX uses this directly
-if (HidD_SetOutputReport) {
-    Interceptor.attach(HidD_SetOutputReport, {
-        onEnter(args) {
-            const handle = args[0];
-            const buf = args[1];
-            const len = args[2].toInt32();
-            send({ api: 'HidD_SetOutputReport', dir: 'OUT', ts: Date.now(),
-                   len: len, path: getPath(handle), hex: dumpBytes(buf, len) });
-        }
-    });
-}
-
-if (HidD_SetFeature) {
-    Interceptor.attach(HidD_SetFeature, {
-        onEnter(args) {
-            const handle = args[0];
-            const buf = args[1];
-            const len = args[2].toInt32();
-            send({ api: 'HidD_SetFeature', dir: 'OUT', ts: Date.now(),
-                   len: len, path: getPath(handle), hex: dumpBytes(buf, len) });
-        }
-    });
-}
-
-if (HidD_GetFeature) {
-    Interceptor.attach(HidD_GetFeature, {
-        onEnter(args) {
-            this.handle = args[0];
-            this.buf = args[1];
-            this.len = args[2].toInt32();
-        },
-        onLeave(retval) {
-            if (retval.toInt32() !== 0) {
-                send({ api: 'HidD_GetFeature', dir: 'IN', ts: Date.now(),
-                       len: this.len, path: getPath(this.handle),
-                       hex: dumpBytes(this.buf, this.len) });
+// Hook NtWriteFile
+try {
+    var pNtWriteFile = Module.getExportByName('ntdll.dll', 'NtWriteFile');
+    Interceptor.attach(pNtWriteFile, {
+        onEnter: function(args) {
+            var len = args[6].toInt32();
+            if (len > 0 && len < 1000) {
+                send({ api: 'NtWriteFile', len: len, hex: toHex(args[5], len) });
             }
         }
     });
+    send({ api: 'HOOK', msg: 'NtWriteFile OK' });
+} catch(e) {
+    send({ api: 'HOOK_ERR', msg: 'NtWriteFile: ' + e.message });
 }
+
+// Hook NtDeviceIoControlFile
+try {
+    var pNtIoctl = Module.getExportByName('ntdll.dll', 'NtDeviceIoControlFile');
+    Interceptor.attach(pNtIoctl, {
+        onEnter: function(args) {
+            var ioctl = args[5].toInt32() >>> 0;
+            var inLen = args[7].toInt32();
+            if (inLen > 0 && inLen < 1000) {
+                send({ api: 'NtDeviceIoControlFile',
+                       ioctl: '0x' + ioctl.toString(16).padStart(8, '0'),
+                       len: inLen, hex: toHex(args[6], inLen) });
+            }
+        }
+    });
+    send({ api: 'HOOK', msg: 'NtDeviceIoControlFile OK' });
+} catch(e) {
+    send({ api: 'HOOK_ERR', msg: 'NtDeviceIoControlFile: ' + e.message });
+}
+
+// Hook WriteFile (kernel32)
+try {
+    var pWriteFile = Module.getExportByName('kernel32.dll', 'WriteFile');
+    Interceptor.attach(pWriteFile, {
+        onEnter: function(args) {
+            var len = args[2].toInt32();
+            if (len > 0 && len < 1000) {
+                send({ api: 'WriteFile', len: len, hex: toHex(args[1], len) });
+            }
+        }
+    });
+    send({ api: 'HOOK', msg: 'WriteFile OK' });
+} catch(e) {
+    send({ api: 'HOOK_ERR', msg: 'WriteFile: ' + e.message });
+}
+
+// Hook DeviceIoControl (kernel32)
+try {
+    var pDevIoCtl = Module.getExportByName('kernel32.dll', 'DeviceIoControl');
+    Interceptor.attach(pDevIoCtl, {
+        onEnter: function(args) {
+            var ioctl = args[1].toInt32() >>> 0;
+            var inLen = args[3].toInt32();
+            if (inLen > 0 && inLen < 1000) {
+                send({ api: 'DeviceIoControl',
+                       ioctl: '0x' + ioctl.toString(16).padStart(8, '0'),
+                       len: inLen, hex: toHex(args[2], inLen) });
+            }
+        }
+    });
+    send({ api: 'HOOK', msg: 'DeviceIoControl OK' });
+} catch(e) {
+    send({ api: 'HOOK_ERR', msg: 'DeviceIoControl: ' + e.message });
+}
+
+// Hook HidD_ functions
+var hidFuncs = ['HidD_SetOutputReport', 'HidD_GetFeature', 'HidD_SetFeature',
+                'HidD_GetInputReport', 'HidD_GetAttributes'];
+hidFuncs.forEach(function(name) {
+    try {
+        var addr = Module.getExportByName('hid.dll', name);
+        Interceptor.attach(addr, {
+            onEnter: function(args) {
+                var len = args[2].toInt32();
+                send({ api: name, len: len, hex: toHex(args[1], len) });
+            }
+        });
+        send({ api: 'HOOK', msg: name + ' OK' });
+    } catch(e) {
+        send({ api: 'HOOK_ERR', msg: name + ': ' + e.message });
+    }
+});
+
+// Hook WSASend / send (in case they use raw sockets/L2CAP)
+try {
+    var pSend = Module.getExportByName('ws2_32.dll', 'send');
+    Interceptor.attach(pSend, {
+        onEnter: function(args) {
+            var len = args[2].toInt32();
+            if (len > 0 && len < 1000) {
+                send({ api: 'ws2_send', len: len, hex: toHex(args[1], len) });
+            }
+        }
+    });
+    send({ api: 'HOOK', msg: 'ws2_send OK' });
+} catch(e) {
+    send({ api: 'HOOK_ERR', msg: 'ws2_send: ' + e.message });
+}
+
+try {
+    var pWSASend = Module.getExportByName('ws2_32.dll', 'WSASend');
+    Interceptor.attach(pWSASend, {
+        onEnter: function(args) {
+            send({ api: 'WSASend', msg: 'called' });
+        }
+    });
+    send({ api: 'HOOK', msg: 'WSASend OK' });
+} catch(e) {
+    send({ api: 'HOOK_ERR', msg: 'WSASend: ' + e.message });
+}
+
+send({ api: 'READY', msg: 'All hooks installed' });
 """
 
+counter = {}
 
 def on_message(msg, data):
     if msg["type"] == "send":
         p = msg["payload"]
-        d = p["dir"]
-        arrow = ">>>" if d == "OUT" else "<<<"
+        api = p["api"]
+
+        if api in ("HOOK", "HOOK_ERR", "READY"):
+            prefix = "✅" if api == "HOOK" else ("❌" if api == "HOOK_ERR" else "🎯")
+            print(f"  {prefix} {p['msg']}")
+            return
+
+        # Count calls per API
+        counter[api] = counter.get(api, 0) + 1
         ioctl = f" IOCTL={p['ioctl']}" if "ioctl" in p else ""
-        print(f"[{p['ts']}] {arrow} {p['api']}{ioctl} len={p['len']}")
-        print(f"  PATH: {p['path']}")
-        print(f"  DATA: {p['hex']}")
-        print()
+        print(f"[{counter[api]:5d}] {api}{ioctl} len={p.get('len','?')}")
+        print(f"        {p.get('hex','')}")
+
     elif msg["type"] == "error":
         print(f"[ERROR] {msg['description']}", file=sys.stderr)
 
@@ -156,9 +173,6 @@ def on_message(msg, data):
 def main():
     if len(sys.argv) < 2:
         print("Usage: python frida_dsx_sniff.py <PID>")
-        print()
-        print("Find DSX PID with:")
-        print("  Get-Process DSX | Select-Object Id, WorkingSet64")
         sys.exit(1)
 
     pid = int(sys.argv[1])
@@ -168,12 +182,8 @@ def main():
     script.on("message", on_message)
     script.load()
 
-    print(f"Hooked DSX PID {pid} — all HID APIs covered:")
-    print("  - NtWriteFile (raw writes)")
-    print("  - NtDeviceIoControlFile (IOCTL)")
-    print("  - HidD_SetOutputReport / SetFeature / GetFeature")
     print()
-    print("Activate haptics in DSX now! Ctrl+C to stop.")
+    print("Waiting for calls... Ctrl+C to stop.")
     print("=" * 72)
 
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
