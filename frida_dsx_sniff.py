@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Frida-based HID sniffer for DSX.exe (32-bit compatible)
-Uses frida.core (spawn/attach) with the same API that frida-trace uses.
 
 Usage:
     pip install frida-tools
@@ -11,14 +10,22 @@ Usage:
 import frida
 import sys
 import signal
+import subprocess
 
-# Use frida-trace compatible approach — inject via session, not Module.getExportByName
 SCRIPT_CODE = """
 'use strict';
 
-// WriteFile — main write path
-var pWriteFile = Module.getExportByName('kernel32.dll', 'WriteFile');
-Interceptor.attach(pWriteFile, {
+function hookExport(name, handler) {
+    var addr = Module.findExportByName(null, name);
+    if (addr) {
+        Interceptor.attach(addr, handler);
+        console.log('[+] ' + name + ' hooked at ' + addr);
+    } else {
+        console.log('[-] ' + name + ' not found');
+    }
+}
+
+hookExport('WriteFile', {
     onEnter: function(args) {
         var len = args[2].toInt32();
         if (len >= 10 && len <= 548) {
@@ -27,11 +34,8 @@ Interceptor.attach(pWriteFile, {
         }
     }
 });
-console.log('[+] WriteFile hooked');
 
-// DeviceIoControl
-var pDevIoCtl = Module.getExportByName('kernel32.dll', 'DeviceIoControl');
-Interceptor.attach(pDevIoCtl, {
+hookExport('DeviceIoControl', {
     onEnter: function(args) {
         var ioctl = args[1].toInt32() >>> 0;
         var inLen = args[3].toInt32();
@@ -41,63 +45,48 @@ Interceptor.attach(pDevIoCtl, {
         }
     }
 });
-console.log('[+] DeviceIoControl hooked');
 
-// HidD_SetOutputReport
-try {
-    var pSetOutput = Module.getExportByName('hid.dll', 'HidD_SetOutputReport');
-    Interceptor.attach(pSetOutput, {
-        onEnter: function(args) {
-            var len = args[2].toInt32();
-            console.log('>>> HidD_SetOutputReport len=' + len);
-            console.log(hexdump(args[1], {length: Math.min(len, 141)}));
-        }
-    });
-    console.log('[+] HidD_SetOutputReport hooked');
-} catch(e) {
-    console.log('[-] HidD_SetOutputReport: ' + e.message);
-}
+hookExport('HidD_SetOutputReport', {
+    onEnter: function(args) {
+        var len = args[2].toInt32();
+        console.log('>>> HidD_SetOutputReport len=' + len);
+        console.log(hexdump(args[1], {length: Math.min(len, 141)}));
+    }
+});
 
-// HidD_SetFeature
-try {
-    var pSetFeat = Module.getExportByName('hid.dll', 'HidD_SetFeature');
-    Interceptor.attach(pSetFeat, {
-        onEnter: function(args) {
-            var len = args[2].toInt32();
-            console.log('>>> HidD_SetFeature len=' + len);
-            console.log(hexdump(args[1], {length: Math.min(len, 141)}));
-        }
-    });
-    console.log('[+] HidD_SetFeature hooked');
-} catch(e) {
-    console.log('[-] HidD_SetFeature: ' + e.message);
-}
+hookExport('HidD_SetFeature', {
+    onEnter: function(args) {
+        var len = args[2].toInt32();
+        console.log('>>> HidD_SetFeature len=' + len);
+        console.log(hexdump(args[1], {length: Math.min(len, 141)}));
+    }
+});
 
-console.log('\\n[*] All hooks ready — activate DSX haptics now!');
-console.log('=' .repeat(72));
+console.log('\\n[*] Ready — activate DSX haptics!');
+console.log('='.repeat(72));
 """
 
 
 def on_message(msg, data):
-    if msg["type"] == "error":
+    if msg["type"] == "log":
+        print(msg["payload"])
+    elif msg["type"] == "error":
         print(f"[ERROR] {msg['description']}", file=sys.stderr)
 
 
 def main():
     if len(sys.argv) < 2:
         print("Usage: python frida_dsx_sniff.py <PID>")
-        print("  Get-Process DSX | Select-Object Id")
         sys.exit(1)
 
     pid = int(sys.argv[1])
-    print(f"Attaching to PID {pid} (arch-aware)...")
+    print(f"Attaching to PID {pid}...")
 
     session = frida.attach(pid)
-    script = session.create_script(SCRIPT_CODE, runtime="v8")
+    script = session.create_script(SCRIPT_CODE)
     script.on("message", on_message)
     script.load()
 
-    print("Ctrl+C to stop.\n")
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
     sys.stdin.read()
 
