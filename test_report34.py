@@ -79,8 +79,8 @@ def build_report_34(seq, audio_bytes, control_template=None):
 
     # Embed control data at offset 139
     if control_template:
-        # Copy control portion (skip report ID byte of 0x32)
-        ctrl_data = control_template[1:]  # everything after 0x32 report ID
+        # Skip report ID (byte 0) AND sequence (byte 1) from 0x32 template
+        ctrl_data = control_template[2:]  # skip 0x32 + seq byte
         ctrl_len = min(len(ctrl_data), REPORT_SIZE - 139)
         buf[139:139 + ctrl_len] = ctrl_data[:ctrl_len]
 
@@ -155,9 +155,6 @@ def send_sine(dev, freq=200, duration=3.0, control_template=None):
             audio[s] = val_u8      # left
             audio[s + 1] = val_u8  # right
             sample_idx += 1
-
-        # Build timestamp
-        ts_bytes = ts.to_bytes(3, 'big')
 
         report = bytearray(build_report_34(seq, audio, control_template))
         ts_wrapped = ts & 0xFFFFFF  # 3 bytes max
