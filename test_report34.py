@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 """
 Test Report 0x34 haptic audio on DualSense via BT.
-
-Mode 1 (--replay):  Replay captured DSX reports (verifies format)
-Mode 2 (--sine):    Send sine wave via Report 0x34
-Mode 3 (--wav):     Send WAV file via Report 0x34
+Uses captured DSX reports as template, only replaces audio region.
 
 Usage:
     python test_report34.py --replay
-    python test_report34.py --sine --freq 200
+    python test_report34.py --sine --freq 200 --amp 5
     python test_report34.py --wav haptics_test.wav
 """
 
@@ -24,14 +21,11 @@ import binascii
 DS5_VID = 0x054C
 DS5_PID = 0x0CE6
 DS5_EDGE_PID = 0x0DF2
-
-REPORT_SIZE = 547  # Full report including report ID
-
-# CRC32 with seed byte 0xA2 prepended
-# For 0x34: CRC over bytes 0-265, stored LE at bytes 266-269
-# For 0x32: CRC over bytes 0-137, stored LE at bytes 138-141
-CRC34_DATA_END = 266
-CRC32_DATA_END = 138
+REPORT_SIZE = 547
+AUDIO_START = 13
+AUDIO_END = 139  # exclusive
+AUDIO_LEN = AUDIO_END - AUDIO_START  # 126 bytes
+CRC_OFFSET = 266
 
 
 def calc_crc(data):
@@ -40,163 +34,98 @@ def calc_crc(data):
 
 
 def find_ds5():
-    """Find DualSense controller."""
     for dev in hid.enumerate(DS5_VID, DS5_PID) + hid.enumerate(DS5_VID, DS5_EDGE_PID):
-        # BT device
-        if dev.get("interface_number", -1) == -1 or dev.get("usage_page") == 1:
+        if dev.get("usage_page") == 1 or dev.get("interface_number", -1) == -1:
             return dev
     return None
 
 
+def load_template():
+    """Load captured reports as template."""
+    try:
+        with open("dsx_report34_capture.bin", "rb") as f:
+            data = f.read()
+        n = len(data) // REPORT_SIZE
+        if n == 0:
+            raise ValueError("Empty capture file")
+        print(f"Loaded {n} captured template reports")
+        return data
+    except FileNotFoundError:
+        print("ERROR: dsx_report34_capture.bin not found!")
+        print("Run the DSX capture first (frida-trace).")
+        sys.exit(1)
+
+
+def get_template_report(template_data, index):
+    """Get a template report by index (wraps around)."""
+    n = len(template_data) // REPORT_SIZE
+    i = index % n
+    return bytearray(template_data[i * REPORT_SIZE:(i + 1) * REPORT_SIZE])
+
+
+def inject_audio(template_report, audio_bytes):
+    """Replace audio region in template, recalculate CRC."""
+    buf = bytearray(template_report)
+    audio_len = min(len(audio_bytes), AUDIO_LEN)
+    buf[AUDIO_START:AUDIO_START + audio_len] = audio_bytes[:audio_len]
+    # Recalculate CRC
+    crc = calc_crc(bytes(buf[:CRC_OFFSET]))
+    struct.pack_into('<I', buf, CRC_OFFSET, crc)
+    return bytes(buf)
+
+
 def open_ds5():
-    """Open DualSense HID device."""
     dev_info = find_ds5()
     if not dev_info:
         print("DualSense not found!")
         sys.exit(1)
-
-    print(f"Found: {dev_info['product_string']} ({dev_info['path']})")
+    print(f"Found: {dev_info['product_string']}")
     d = hid.device()
     d.open_path(dev_info["path"])
     return d
 
 
-def build_report_34(seq, audio_bytes, control_template=None):
-    """
-    Build a 547-byte Report 0x34.
-    
-    Layout:
-        Byte 0:       0x34 (Report ID)
-        Byte 1:       Sequence counter
-        Byte 2-4:     91 07 fe (flags, constant)
-        Byte 5-9:     30 30 30 30 30 ("00000")
-        Byte 10-12:   Timestamp (we increment by 0x20000 each packet)
-        Byte 13-138:  Audio PCM (126 bytes, signed int8, stereo interleaved)
-        Byte 139-546: Control data (same as 0x32 payload)
-    """
-    buf = bytearray(REPORT_SIZE)
-    buf[0] = 0x34
-    buf[1] = seq & 0xFF
-    buf[2] = 0x91
-    buf[3] = 0x07
-    buf[4] = 0xFE
-    # "00000"
-    buf[5:10] = b'\x30\x30\x30\x30\x30'
-    # Timestamp — will be set by caller
-    # buf[10:13] set externally
-
-    # Audio data (126 bytes max)
-    audio_len = min(len(audio_bytes), 126)
-    buf[13:13 + audio_len] = audio_bytes[:audio_len]
-
-    # Embed control data at offset 139
-    if control_template:
-        # Skip report ID (byte 0) AND sequence (byte 1) from 0x32 template
-        ctrl_data = control_template[2:]  # skip 0x32 + seq byte
-        ctrl_len = min(len(ctrl_data), REPORT_SIZE - 139)
-        buf[139:139 + ctrl_len] = ctrl_data[:ctrl_len]
-
-    # CRC32 over bytes 0-265 with seed 0xA2, stored LE at 266-269
-    crc = calc_crc(bytes(buf[:CRC34_DATA_END]))
-    struct.pack_into('<I', buf, CRC34_DATA_END, crc)
-
-    return bytes(buf)
+def replay_captured(dev, template_data):
+    """Replay captured DSX reports exactly as-is."""
+    n = len(template_data) // REPORT_SIZE
+    print(f"Replaying {n} captured reports...")
+    for i in range(n):
+        dev.write(template_data[i * REPORT_SIZE:(i + 1) * REPORT_SIZE])
+        time.sleep(0.030)
+    print("Done!")
 
 
-def build_report_32(seq, control_template=None):
-    """Build a 547-byte Report 0x32 (control only, no audio)."""
-    if control_template:
-        buf = bytearray(control_template)
-        buf[0] = 0x32
-        buf[1] = seq & 0xFF
-    else:
-        buf = bytearray(REPORT_SIZE)
-        buf[0] = 0x32
-        buf[1] = seq & 0xFF
-        buf[2] = 0x90
-        buf[3] = 0x3F
-        buf[4] = 0xFD
-        buf[5] = 0xF7
-        buf[8] = 0x7E
-        buf[9] = 0x7F
-        buf[10] = 0xFF
-        buf[11] = 0x09
-        buf[13] = 0x0F
-
-    # CRC32 over bytes 0-137 with seed 0xA2, stored LE at 138-141
-    crc = calc_crc(bytes(buf[:CRC32_DATA_END]))
-    struct.pack_into('<I', buf, CRC32_DATA_END, crc)
-
-    return bytes(buf)
-
-
-def replay_captured(dev):
-    """Replay captured DSX reports."""
-    try:
-        with open("dsx_report34_capture.bin", "rb") as f:
-            data = f.read()
-    except FileNotFoundError:
-        print("dsx_report34_capture.bin not found! Run the capture first.")
-        sys.exit(1)
-
-    num_reports = len(data) // REPORT_SIZE
-    print(f"Replaying {num_reports} captured Report 0x34 packets...")
-    print("You should feel vibration if the format is correct!")
-
-    for i in range(num_reports):
-        report = data[i * REPORT_SIZE:(i + 1) * REPORT_SIZE]
-        dev.write(report)
-        time.sleep(0.030)  # ~33 Hz like DSX
-
-    print("Replay done!")
-
-
-def send_sine(dev, freq=200, duration=3.0, control_template=None):
-    """Send sine wave via Report 0x34."""
-    sample_rate = 4158  # ~126 samples * 33 packets/sec
-    interval = 0.030  # 30ms between packets
-    samples_per_packet = 126  # stereo interleaved = 63 frames
-
+def send_sine(dev, template_data, freq=200, duration=3.0, amplitude=5):
+    """Send sine wave using captured reports as template."""
+    interval = 0.030
     num_packets = int(duration / interval)
-    print(f"Sending {freq}Hz sine for {duration}s ({num_packets} packets)...")
+    frames_per_packet = AUDIO_LEN // 2  # stereo interleaved
+    sample_rate = frames_per_packet / interval  # effective sample rate
 
-    seq = 0x80
-    ts = 0x7CD240  # starting timestamp (from capture)
+    print(f"Sending {freq}Hz sine (amp={amplitude}) for {duration}s "
+          f"({num_packets} packets, ~{sample_rate:.0f} Hz effective rate)...")
+
     sample_idx = 0
-
     for pkt in range(num_packets):
-        # Generate stereo interleaved audio
-        audio = bytearray(samples_per_packet)
-        for s in range(0, samples_per_packet, 2):
+        template = get_template_report(template_data, pkt)
+
+        audio = bytearray(AUDIO_LEN)
+        for s in range(0, AUDIO_LEN, 2):
             t = sample_idx / sample_rate
-            val = int(127 * math.sin(2 * math.pi * freq * t))
+            val = int(amplitude * math.sin(2 * math.pi * freq * t))
             val = max(-128, min(127, val))
-            val_u8 = val & 0xFF
-            audio[s] = val_u8      # left
-            audio[s + 1] = val_u8  # right
+            audio[s] = val & 0xFF
+            audio[s + 1] = val & 0xFF
             sample_idx += 1
 
-        report = bytearray(build_report_34(seq, audio, control_template))
-        ts_wrapped = ts & 0xFFFFFF  # 3 bytes max
-        report[10:13] = ts_wrapped.to_bytes(3, 'big')
-
-        dev.write(bytes(report))
-
-        seq = (seq + 0x20) & 0xFF
-        ts += 0x20000
+        dev.write(inject_audio(template, audio))
         time.sleep(interval)
-
-    # Send a few silent 0x32 to cleanly stop
-    for _ in range(5):
-        dev.write(build_report_32(seq, control_template))
-        seq = (seq + 0x10) & 0xFF
-        time.sleep(0.030)
 
     print("Done!")
 
 
-def send_wav(dev, wav_path, control_template=None):
-    """Send WAV file via Report 0x34."""
+def send_wav(dev, template_data, wav_path):
+    """Send WAV file using captured reports as template."""
     with wave.open(wav_path, 'rb') as wf:
         nchannels = wf.getnchannels()
         sampwidth = wf.getsampwidth()
@@ -206,23 +135,17 @@ def send_wav(dev, wav_path, control_template=None):
 
     print(f"WAV: {nchannels}ch, {sampwidth * 8}bit, {framerate}Hz, {nframes} frames")
 
-    # Convert to signed int8 stereo interleaved
-    samples = []
+    # Convert to signed int8
     if sampwidth == 2:
-        # 16-bit signed → 8-bit signed
-        fmt = f"<{nframes * nchannels}h"
-        pcm16 = struct.unpack(fmt, raw)
-        for s in pcm16:
-            samples.append((s >> 8) & 0xFF)  # Take high byte
+        pcm16 = struct.unpack(f'<{nframes * nchannels}h', raw)
+        samples = [(s >> 8) & 0xFF for s in pcm16]
     elif sampwidth == 1:
-        # 8-bit unsigned → 8-bit signed
-        for b in raw:
-            samples.append((b - 128) & 0xFF)
+        samples = [(b - 128) & 0xFF for b in raw]
     else:
         print(f"Unsupported sample width: {sampwidth}")
         sys.exit(1)
 
-    # If mono, duplicate to stereo
+    # Mono → stereo
     if nchannels == 1:
         stereo = []
         for s in samples:
@@ -230,82 +153,60 @@ def send_wav(dev, wav_path, control_template=None):
             stereo.append(s)
         samples = stereo
 
-    # Resample to match DS5 rate if needed
-    # DSX sends 126 bytes per packet at ~33Hz = 4158 bytes/sec (2079 frames/sec stereo)
-    target_rate = 2079  # frames per second
-    if framerate != target_rate:
-        print(f"Resampling from {framerate}Hz to {target_rate}Hz...")
-        ratio = framerate / target_rate
+    # Resample to match packet rate
+    frames_per_packet = AUDIO_LEN // 2
+    interval = 0.030
+    target_frame_rate = frames_per_packet / interval
+    ratio = framerate / target_frame_rate
+
+    if abs(ratio - 1.0) > 0.01:
+        print(f"Resampling from {framerate}Hz to {target_frame_rate:.0f}Hz...")
         resampled = []
         i = 0.0
         while int(i) * 2 + 1 < len(samples):
             idx = int(i) * 2
-            resampled.append(samples[idx])      # left
-            resampled.append(samples[idx + 1])  # right
+            resampled.append(samples[idx])
+            resampled.append(samples[idx + 1])
             i += ratio
         samples = resampled
         print(f"Resampled to {len(samples) // 2} frames")
 
-    samples_per_packet = 126
-    num_packets = len(samples) // samples_per_packet
-    duration = num_packets * 0.030
+    num_packets = len(samples) // AUDIO_LEN
+    duration = num_packets * interval
     print(f"Sending {num_packets} packets (~{duration:.1f}s)...")
 
-    seq = 0x80
-    ts = 0x7CD240
-
     for pkt in range(num_packets):
-        offset = pkt * samples_per_packet
-        audio = bytes(samples[offset:offset + samples_per_packet])
-
-        report = bytearray(build_report_34(seq, audio, control_template))
-        ts_wrapped = ts & 0xFFFFFF  # 3 bytes max
-        report[10:13] = ts_wrapped.to_bytes(3, 'big')
-
-        dev.write(bytes(report))
-
-        seq = (seq + 0x20) & 0xFF
-        ts += 0x20000
-        time.sleep(0.030)
-
-    # Clean stop
-    for _ in range(5):
-        dev.write(build_report_32(seq, control_template))
-        seq = (seq + 0x10) & 0xFF
-        time.sleep(0.030)
+        template = get_template_report(template_data, pkt)
+        offset = pkt * AUDIO_LEN
+        audio = bytes(samples[offset:offset + AUDIO_LEN])
+        dev.write(inject_audio(template, audio))
+        time.sleep(interval)
 
     print("Done!")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Test DS5 Report 0x34 Haptics")
+    parser = argparse.ArgumentParser(description="DS5 Report 0x34 Haptics")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--replay", action="store_true", help="Replay captured DSX reports")
     group.add_argument("--sine", action="store_true", help="Send sine wave")
     group.add_argument("--wav", type=str, help="Send WAV file")
     parser.add_argument("--freq", type=int, default=200, help="Sine frequency (Hz)")
-    parser.add_argument("--duration", type=float, default=3.0, help="Sine duration (sec)")
+    parser.add_argument("--duration", type=float, default=3.0, help="Duration (sec)")
+    parser.add_argument("--amp", type=int, default=5, help="Sine amplitude (1-127)")
     args = parser.parse_args()
 
+    template_data = load_template()
     dev = open_ds5()
-
-    # Load control template if available
-    control_template = None
-    try:
-        with open("dsx_report32_template.bin", "rb") as f:
-            control_template = list(f.read())
-        print("Loaded control template from DSX capture")
-    except FileNotFoundError:
-        print("No control template, using default")
 
     try:
         if args.replay:
-            replay_captured(dev)
+            replay_captured(dev, template_data)
         elif args.sine:
-            send_sine(dev, freq=args.freq, duration=args.duration,
-                      control_template=control_template)
+            send_sine(dev, template_data, freq=args.freq,
+                      duration=args.duration, amplitude=args.amp)
         elif args.wav:
-            send_wav(dev, args.wav, control_template=control_template)
+            send_wav(dev, template_data, args.wav)
     finally:
         dev.close()
 
