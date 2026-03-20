@@ -160,7 +160,8 @@ def send_sine(dev, freq=200, duration=3.0, control_template=None):
         ts_bytes = ts.to_bytes(3, 'big')
 
         report = bytearray(build_report_34(seq, audio, control_template))
-        report[10:13] = ts_bytes
+        ts_wrapped = ts & 0xFFFFFF  # 3 bytes max
+        report[10:13] = ts_wrapped.to_bytes(3, 'big')
 
         dev.write(bytes(report))
 
@@ -241,8 +242,8 @@ def send_wav(dev, wav_path, control_template=None):
         audio = bytes(samples[offset:offset + samples_per_packet])
 
         report = bytearray(build_report_34(seq, audio, control_template))
-        ts_bytes = ts.to_bytes(3, 'big')
-        report[10:13] = ts_bytes
+        ts_wrapped = ts & 0xFFFFFF  # 3 bytes max
+        report[10:13] = ts_wrapped.to_bytes(3, 'big')
 
         dev.write(bytes(report))
 
