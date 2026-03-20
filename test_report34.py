@@ -19,12 +19,24 @@ import math
 import wave
 import argparse
 import sys
+import binascii
 
 DS5_VID = 0x054C
 DS5_PID = 0x0CE6
 DS5_EDGE_PID = 0x0DF2
 
 REPORT_SIZE = 547  # Full report including report ID
+
+# CRC32 with seed byte 0xA2 prepended
+# For 0x34: CRC over bytes 0-265, stored LE at bytes 266-269
+# For 0x32: CRC over bytes 0-137, stored LE at bytes 138-141
+CRC34_DATA_END = 266
+CRC32_DATA_END = 138
+
+
+def calc_crc(data):
+    """CRC32 with 0xA2 seed byte prepended."""
+    return binascii.crc32(bytes([0xA2]) + data) & 0xFFFFFFFF
 
 
 def find_ds5():
@@ -84,6 +96,10 @@ def build_report_34(seq, audio_bytes, control_template=None):
         ctrl_len = min(len(ctrl_data), REPORT_SIZE - 139)
         buf[139:139 + ctrl_len] = ctrl_data[:ctrl_len]
 
+    # CRC32 over bytes 0-265 with seed 0xA2, stored LE at 266-269
+    crc = calc_crc(bytes(buf[:CRC34_DATA_END]))
+    struct.pack_into('<I', buf, CRC34_DATA_END, crc)
+
     return bytes(buf)
 
 
@@ -93,7 +109,6 @@ def build_report_32(seq, control_template=None):
         buf = bytearray(control_template)
         buf[0] = 0x32
         buf[1] = seq & 0xFF
-        return bytes(buf)
     else:
         buf = bytearray(REPORT_SIZE)
         buf[0] = 0x32
@@ -107,7 +122,12 @@ def build_report_32(seq, control_template=None):
         buf[10] = 0xFF
         buf[11] = 0x09
         buf[13] = 0x0F
-        return bytes(buf)
+
+    # CRC32 over bytes 0-137 with seed 0xA2, stored LE at 138-141
+    crc = calc_crc(bytes(buf[:CRC32_DATA_END]))
+    struct.pack_into('<I', buf, CRC32_DATA_END, crc)
+
+    return bytes(buf)
 
 
 def replay_captured(dev):
