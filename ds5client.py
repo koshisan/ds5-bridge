@@ -592,21 +592,10 @@ class DS5Client:
         self._r34_template = buf
         self.log('Using default R34 template')
 
-    _r34_accum = bytearray()
-
     def _send_haptic_report(self, audio_data):
-        """Route to Report 0x34 (BT) or 0x32 (fallback).
-        
-        0x32 produces 64 bytes (32 stereo samples).
-        0x34 needs 126 bytes (63 stereo samples).
-        Accumulate two 0x32 chunks, take 126 bytes, send as 0x34.
-        """
+        """Route to Report 0x34 (BT) or 0x32 (USB)."""
         if self.is_bt:
-            self._r34_accum.extend(audio_data)
-            while len(self._r34_accum) >= 126:
-                chunk = bytes(self._r34_accum[:126])
-                del self._r34_accum[:126]
-                self._send_report_0x34(chunk)
+            self._send_report_0x34(audio_data)
         else:
             self._send_report_0x32(audio_data)
 
@@ -663,9 +652,11 @@ class DS5Client:
             self.haptic_peak_hold = max(self.haptic_peak_hold - 0.01, peak)
 
     def _resample_chunk(self, chunk):
-        """Resample s16 stereo chunk to 32 u8 stereo samples with dithering."""
+        """Resample s16 stereo chunk to target stereo samples with dithering.
+        BT Report 0x34: 63 samples (126 bytes). Report 0x32: 32 samples (64 bytes)."""
         import numpy as np
         from scipy.signal import resample_poly
+        out_samples = 63 if self.is_bt else 32
         n = len(chunk) // 4
         left = np.zeros(n, dtype=np.float64)
         right = np.zeros(n, dtype=np.float64)
@@ -673,24 +664,19 @@ class DS5Client:
             l, r = struct.unpack_from('<hh', chunk, i * 4)
             left[i] = l
             right[i] = r
-        # Polyphase resampling (better than FFT for streaming chunks)
-        # Downsample ratio: n -> 32 samples
-        # Use resample_poly with up=32, down=n for exact ratio
-        if n > 32:
-            left_ds = resample_poly(left, 32, n)[:32]
-            right_ds = resample_poly(right, 32, n)[:32]
-        elif n == 32:
+        if n > out_samples:
+            left_ds = resample_poly(left, out_samples, n)[:out_samples]
+            right_ds = resample_poly(right, out_samples, n)[:out_samples]
+        elif n == out_samples:
             left_ds = left
             right_ds = right
         else:
-            left_ds = resample_poly(left, 32, n)[:32]
-            right_ds = resample_poly(right, 32, n)[:32]
+            left_ds = resample_poly(left, out_samples, n)[:out_samples]
+            right_ds = resample_poly(right, out_samples, n)[:out_samples]
         gain = self.config.get('haptic_gain', 2.0)
-        # Apply gain, then quantize s16 -> s8 with TPDF dithering
-        # DS5 haptic format is S8 (signed, center=0), NOT U8
-        dither = np.random.triangular(-1, 0, 1, size=32)
-        audio = bytearray(64)
-        for i in range(32):
+        dither = np.random.triangular(-1, 0, 1, size=out_samples)
+        audio = bytearray(out_samples * 2)
+        for i in range(out_samples):
             l_f = left_ds[i] * gain / 256.0 + dither[i]
             r_f = right_ds[i] * gain / 256.0 + dither[i]
             l_s8 = int(np.clip(round(l_f), -128, 127))
@@ -700,9 +686,13 @@ class DS5Client:
         return audio
 
     def _haptic_send_loop(self):
-        """Timed sender: fires every 10.67ms when timed=True."""
-        INTERVAL_NS = 10_666_666
-        INPUT_BYTES_PER_TICK = 512 * 4  # 512 s16 stereo samples = 10.67ms @ 48kHz
+        """Timed sender: BT 0x34 at ~30ms, USB 0x32 at ~10.67ms."""
+        if self.is_bt:
+            INTERVAL_NS = 30_000_000  # 30ms for Report 0x34 (~33Hz)
+            INPUT_BYTES_PER_TICK = 1455 * 4  # ~1455 s16 stereo frames = 30ms @ 48kHz
+        else:
+            INTERVAL_NS = 10_666_666  # 10.67ms for Report 0x32
+            INPUT_BYTES_PER_TICK = 512 * 4  # 512 s16 stereo samples
         next_ns = time.monotonic_ns()
 
         while self.running and self._haptic_sender_running:
@@ -840,20 +830,25 @@ class DS5Client:
                         self.log(f'USB write error: {e}')
                 return
 
-            # BT mode: existing logic
-            if not self._haptic_sender_running:
-                self._start_haptic_sender()
+            # BT mode: accumulate s16, send Report 0x34 when we have enough
+            # 48kHz → 63 frames per Report 0x34 at ~2079Hz
+            # Need ~1455 input frames (48000/2079*63) = 5820 bytes of s16 stereo
+            if not hasattr(self, '_r34_s16_accum'):
+                self._r34_s16_accum = bytearray()
+            self._r34_s16_accum.extend(raw_s16)
 
-            mode = self.config.get('haptic_mode', 'raw')
-            with self._haptic_lock:
-                if mode == 'resample':
-                    self._haptic_s16_buffer.extend(raw_s16)
-                    if len(self._haptic_s16_buffer) > 48000 * 4:
-                        del self._haptic_s16_buffer[:len(self._haptic_s16_buffer) - 48000 * 4]
-                else:
-                    self._haptic_u8_buffer.extend(raw_s16[:64])
-                    if len(self._haptic_u8_buffer) > 12000:
-                        del self._haptic_u8_buffer[:len(self._haptic_u8_buffer) - 12000]
+            R34_INPUT_BYTES = 1455 * 4  # ~5820 bytes of s16 stereo per Report 0x34
+
+            while len(self._r34_s16_accum) >= R34_INPUT_BYTES:
+                chunk = bytes(self._r34_s16_accum[:R34_INPUT_BYTES])
+                del self._r34_s16_accum[:R34_INPUT_BYTES]
+                audio = self._resample_chunk(chunk)
+                self._update_peak(audio)
+                self._send_report_0x34(audio)
+
+            # Prevent buffer bloat
+            if len(self._r34_s16_accum) > R34_INPUT_BYTES * 3:
+                del self._r34_s16_accum[:len(self._r34_s16_accum) - R34_INPUT_BYTES]
 
         elif data[0] == 0x32:
             if self.is_bt:
