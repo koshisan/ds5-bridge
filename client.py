@@ -220,8 +220,10 @@ def haptic_receiver(haptic_queue, dev, is_bt):
 
                 del sample_buf[:bytes_needed]
 
-                # Build report
-                buf = bytearray(template)
+                # Build report: header from template, audio from stream,
+                # control block zeroed (let game's 0x31 reports handle LED/triggers)
+                buf = bytearray(_R34_SIZE)
+                buf[0:13] = template[0:13]  # only copy header
                 buf[1] = seq & 0xFF
                 tw = ts & 0xFFFFFF
                 buf[10] = (tw >> 16) & 0xFF
