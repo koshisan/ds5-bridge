@@ -117,3 +117,7 @@ Offset   Bytes  Inhalt                              Entspricht in 0x34
 - [x] Stereo-Zuordnung: Even=Left, Odd=Right (verifiziert mit L/R-only WAVs)
 - [x] Bytes 1-11 müssen korrekte Werte haben (Binary Search Test)
 - [x] Byte 12 kann genullt werden ohne Funktionsverlust
+- [x] Control-Block (139+) kann genullt werden (nur Audio + Header nötig)
+- [x] Live-Streaming aus Genshin Impact via ds5-bridge funktioniert
+- [x] Polyphase + Nearest-Neighbor Resampling beide funktional
+- [x] In ds5client.py integriert und produktiv nutzbar
