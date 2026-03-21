@@ -35,8 +35,7 @@ DEFAULT_CONFIG = {
     'client_port': 0,  # 0 = random ephemeral port
     'protocol': 'udp',  # udp or tcp
     'haptic_gain': 2.0,
-    'haptic_mode': 'raw',  # raw or resample
-    'haptic_timed': True,
+    'haptic_mode': 'poly',  # poly (polyphase filter) or fast (nearest-neighbor)
     'autostart': False,
     'debug_output_reports': False,
 }
@@ -652,38 +651,54 @@ class DS5Client:
             self.haptic_peak_hold = max(self.haptic_peak_hold - 0.01, peak)
 
     def _resample_chunk(self, chunk):
-        """Resample s16 stereo chunk to target stereo samples with dithering.
-        BT Report 0x34: 63 samples (126 bytes). Report 0x32: 32 samples (64 bytes)."""
-        import numpy as np
-        from scipy.signal import resample_poly
+        """Resample s16 stereo chunk to target stereo samples.
+        BT Report 0x34: 63 samples (126 bytes). Report 0x32: 32 samples (64 bytes).
+        Mode 'poly': scipy polyphase filter + TPDF dithering (high quality).
+        Mode 'fast': nearest-neighbor decimation (low latency)."""
         out_samples = 63 if self.is_bt else 32
         n = len(chunk) // 4
-        left = np.zeros(n, dtype=np.float64)
-        right = np.zeros(n, dtype=np.float64)
-        for i in range(n):
-            l, r = struct.unpack_from('<hh', chunk, i * 4)
-            left[i] = l
-            right[i] = r
-        if n > out_samples:
-            left_ds = resample_poly(left, out_samples, n)[:out_samples]
-            right_ds = resample_poly(right, out_samples, n)[:out_samples]
-        elif n == out_samples:
-            left_ds = left
-            right_ds = right
-        else:
-            left_ds = resample_poly(left, out_samples, n)[:out_samples]
-            right_ds = resample_poly(right, out_samples, n)[:out_samples]
         gain = self.config.get('haptic_gain', 2.0)
-        dither = np.random.triangular(-1, 0, 1, size=out_samples)
-        audio = bytearray(out_samples * 2)
-        for i in range(out_samples):
-            l_f = left_ds[i] * gain / 256.0 + dither[i]
-            r_f = right_ds[i] * gain / 256.0 + dither[i]
-            l_s8 = int(np.clip(round(l_f), -128, 127))
-            r_s8 = int(np.clip(round(r_f), -128, 127))
-            audio[i*2] = l_s8 & 0xFF
-            audio[i*2+1] = r_s8 & 0xFF
-        return audio
+        mode = self.config.get('haptic_mode', 'poly')
+
+        if mode == 'poly':
+            import numpy as np
+            from scipy.signal import resample_poly
+            left = np.zeros(n, dtype=np.float64)
+            right = np.zeros(n, dtype=np.float64)
+            for i in range(n):
+                l, r = struct.unpack_from('<hh', chunk, i * 4)
+                left[i] = l
+                right[i] = r
+            if n != out_samples:
+                left_ds = resample_poly(left, out_samples, n)[:out_samples]
+                right_ds = resample_poly(right, out_samples, n)[:out_samples]
+            else:
+                left_ds = left
+                right_ds = right
+            dither = np.random.triangular(-1, 0, 1, size=out_samples)
+            audio = bytearray(out_samples * 2)
+            for i in range(out_samples):
+                l_f = left_ds[i] * gain / 256.0 + dither[i]
+                r_f = right_ds[i] * gain / 256.0 + dither[i]
+                l_s8 = int(np.clip(round(l_f), -128, 127))
+                r_s8 = int(np.clip(round(r_f), -128, 127))
+                audio[i*2] = l_s8 & 0xFF
+                audio[i*2+1] = r_s8 & 0xFF
+            return audio
+        else:
+            # Nearest-neighbor: pick every Nth frame, s16→s8
+            ratio = n / out_samples if n > out_samples else 1.0
+            audio = bytearray(out_samples * 2)
+            for i in range(out_samples):
+                src = int(i * ratio) * 4
+                if src + 3 < len(chunk):
+                    l_s16 = int.from_bytes(chunk[src:src+2], 'little', signed=True)
+                    r_s16 = int.from_bytes(chunk[src+2:src+4], 'little', signed=True)
+                    l_val = int(max(-128, min(127, (l_s16 * gain) / 256.0)))
+                    r_val = int(max(-128, min(127, (r_s16 * gain) / 256.0)))
+                    audio[i*2] = l_val & 0xFF
+                    audio[i*2+1] = r_val & 0xFF
+            return audio
 
     def _haptic_send_loop(self):
         """Timed sender: BT 0x34 at ~30ms, USB 0x32 at ~10.67ms."""
@@ -1011,15 +1026,11 @@ class DS5ClientGUI:
         ttk.Label(haptic_frame, text='Mode:').grid(row=1, column=0, sticky='w', padx=(0, 8), pady=(4, 0))
         mode_frame = ttk.Frame(haptic_frame)
         mode_frame.grid(row=1, column=1, columnspan=2, sticky='w', pady=(4, 0))
-        self.haptic_mode_var = tk.StringVar(value=self.client.config.get('haptic_mode', 'raw'))
-        ttk.Radiobutton(mode_frame, text='Raw S16 bytes', variable=self.haptic_mode_var, value='raw',
+        self.haptic_mode_var = tk.StringVar(value=self.client.config.get('haptic_mode', 'poly'))
+        ttk.Radiobutton(mode_frame, text='Polyphase (quality)', variable=self.haptic_mode_var, value='poly',
                         command=self._update_haptic_mode).pack(side='left', padx=(0, 12))
-        ttk.Radiobutton(mode_frame, text='Resample 48k>3k', variable=self.haptic_mode_var, value='resample',
+        ttk.Radiobutton(mode_frame, text='Nearest (fast)', variable=self.haptic_mode_var, value='fast',
                         command=self._update_haptic_mode).pack(side='left')
-
-        self.haptic_timed_var = tk.BooleanVar(value=self.client.config.get('haptic_timed', True))
-        ttk.Checkbutton(haptic_frame, text='Timed sending (10.67ms)', variable=self.haptic_timed_var,
-                       command=self._update_haptic_timed).grid(row=2, column=0, columnspan=3, sticky='w', pady=(4, 0))
 
         # Debug
         dbg_frame = ttk.LabelFrame(tab_config, text='Debug', padding=8)
