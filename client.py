@@ -50,7 +50,7 @@ def output_receiver(sock, dev, is_bt, haptic_queue=None):
 
     while True:
         try:
-            data, addr = sock.recvfrom(256)
+            data, addr = sock.recvfrom(4096)
             if len(data) < 2:
                 continue
             # Debug: log ALL received packets
