@@ -60,23 +60,39 @@ Offset   Bytes  Inhalt                              Entspricht in 0x34
 
 ## Offene Fragen
 
-1. **Bytes 2-9 (Flags/Config):** Was bedeuten `91 07 fe 30 30 30 30 30`?
-   Sind das 8 Bytes Config/Modus? Was passiert bei anderen Werten?
-   `30` = ASCII `0` — ist das ein String-Parameter?
+1. **Bytes 2-4 (Flags/Config):** Was bedeuten `91 07 fe`?
+   Zum Vergleich: 0x32 (Control) hat `90 3f`, 0x31 (Haptics OFF) hat `0f 55`.
+   Alle drei Reports nutzen verschiedene Werte → definitiv Modus-Flags.
+   Aber was genau steuern sie?
 
-2. **Bytes 11-12 (d2 40):** Immer konstant über alle Captures hinweg.
-   Wenn Byte 10 ein Timestamp ist, warum sind 11-12 fix?
-   Oder ist 10-12 gar kein Timestamp, sondern Byte 10 alleine eine
-   Art Frame-Counter und 11-12 sind Config?
+2. **Bytes 5-9 (`30 30 30 30 30`):** ASCII "00000" — Zufall oder String?
+   Binary Search: **5-7 genullt → funktioniert**, **8-9 genullt → Stille**.
+   Also NICHT ein einheitliches Feld mit 2-4. Bytes 5-7 sind optional,
+   Bytes 8-9 sind kritisch. Zwei getrennte Felder?
 
-3. **Bytes 185-187:** Ändern sich pro Paket, aber nicht Audio.
+3. **Bytes 10-12:** Binary Search: **10-11 genullt → Stille**,
+   **12 genullt → funktioniert**. Byte 10 variiert (inkrementiert +2),
+   Byte 11 ist konstant `0xD2` aber kritisch, Byte 12 (`0x40`) irrelevant.
+   Hypothese: Byte 10 = Frame-Counter, Byte 11 = kritischer Config-Wert,
+   Byte 12 = Padding/irrelevant. Kein 3-Byte-Timestamp.
+
+4. **Bytes 185-187:** Ändern sich pro Paket, aber nicht Audio.
    Könnten Adaptive Trigger Werte sein, eine fortlaufende Checksumme,
    oder einfach Noise von DSX's Controller-State.
 
-4. **Sequenz-Inkrement:** 0x34 nutzt +0x20, 0x32 nutzt +0x10.
+5. **Sequenz-Inkrement:** 0x34 nutzt +0x20, 0x32 nutzt +0x10.
    DSX alterniert 0x32 und 0x34 — teilen sie sich einen gemeinsamen
    Sequenz-Counter? (Würde erklären warum 0x34 +0x20 springt wenn
    dazwischen ein 0x32 mit +0x10 kommt.)
+
+6. **Kontext: DS5 hat mehr Audio als nur Haptics.**
+   Der Controller hat echten Speaker-Output und ein Mikrofon.
+   Das HID Descriptor definiert Reports 0x31-0x39 mit steigenden Größen.
+   Report 0x34 ist für Haptic Audio, aber die größeren Reports (0x35-0x39)
+   könnten für Speaker-Audio gedacht sein (höhere Payload = mehr Samples
+   pro Paket = höhere Sample Rate). Die unbekannten Header-Bytes (2-4,
+   5-9, 10-12) könnten Audio-Routing/Config steuern: welcher Ausgang
+   (Haptic vs Speaker), Sample-Format, Lautstärke, etc.
 
 ## Audio-Format
 
