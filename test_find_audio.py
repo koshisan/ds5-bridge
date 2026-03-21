@@ -61,7 +61,7 @@ def make_sine_at(silent_template, start, end, sample_idx, freq=200, amp=80):
     return buf, sample_idx
 
 
-def send_test(dev, captured, template_fn, duration_loops=3):
+def send_test(d, captured, template_fn, duration_loops=3):
     """Send modified reports for N loops of the captured data."""
     n = len(captured) // REPORT_SIZE
     total = n * duration_loops
@@ -100,7 +100,7 @@ def main():
     # Step 1: Silent template (header only)
     print("=== STEP 1: Header only, everything else zeroed ===")
     input("Enter...")
-    send_test(dev, captured,
+    send_test(d, captured,
               lambda base, si: (make_silent_template(base), si))
     r = input("Silent? (y/n): ").strip().lower()
     if r == 'n':
@@ -115,7 +115,7 @@ def main():
             struct.pack_into('<I', buf, CRC_OFFSET, crc)
             return buf, si
 
-        send_test(dev, captured, only_report_id)
+        send_test(d, captured, only_report_id)
         r2 = input("Silent now? (y/n): ").strip().lower()
         if r2 == 'n':
             print("Even with ONLY report ID?! Something is very wrong.")
@@ -144,7 +144,7 @@ def main():
             tmpl = make_silent_template(base)
             return make_sine_at(tmpl, s, e, si, freq=200, amp=80)
 
-        send_test(dev, captured, inject_fn)
+        send_test(d, captured, inject_fn)
         r = input("Vibration? (y/n): ").strip().lower()
         results[(start, end)] = r == 'y'
         status = "YES" if r == 'y' else "no"

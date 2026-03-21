@@ -66,6 +66,9 @@ def get_template_report(template_data, index):
 def inject_audio(template_report, audio_bytes):
     """Replace audio region in template, recalculate CRC."""
     buf = bytearray(template_report)
+    # Clear entire audio region first (remove template's original audio)
+    buf[AUDIO_START:AUDIO_END] = b'\x00' * AUDIO_LEN
+    # Write new audio
     audio_len = min(len(audio_bytes), AUDIO_LEN)
     buf[AUDIO_START:AUDIO_START + audio_len] = audio_bytes[:audio_len]
     # Recalculate CRC
