@@ -564,8 +564,75 @@ class DS5Client:
         t.start()
         self.log('Haptic sender started')
 
+    _r34_template = None
+    _r34_seq = 0x80
+    _r34_ts = 0x80D240
+
+    def _load_r34_template(self):
+        """Load Report 0x34 template from captured DSX data."""
+        if self._r34_template is not None:
+            return
+        for path in [os.path.join(os.path.dirname(__file__), "dsx_report34_capture.bin"),
+                     "dsx_report34_capture.bin"]:
+            try:
+                with open(path, "rb") as f:
+                    data = f.read(547)
+                if len(data) >= 547:
+                    self._r34_template = bytearray(data[:547])
+                    self.log(f'Loaded R34 template from {path}')
+                    return
+            except FileNotFoundError:
+                pass
+        # Default from known constants
+        buf = bytearray(547)
+        buf[0] = 0x34
+        buf[2:5] = b'\x91\x07\xfe'
+        buf[5:10] = b'\x30\x30\x30\x30\x30'
+        buf[11] = 0xD2; buf[12] = 0x40
+        self._r34_template = buf
+        self.log('Using default R34 template')
+
+    _r34_accum = bytearray()
+
+    def _send_haptic_report(self, audio_data):
+        """Route to Report 0x34 (BT) or 0x32 (fallback).
+        
+        0x32 produces 64 bytes (32 stereo samples).
+        0x34 needs 126 bytes (63 stereo samples).
+        Accumulate two 0x32 chunks, take 126 bytes, send as 0x34.
+        """
+        if self.is_bt:
+            self._r34_accum.extend(audio_data)
+            while len(self._r34_accum) >= 126:
+                chunk = bytes(self._r34_accum[:126])
+                del self._r34_accum[:126]
+                self._send_report_0x34(chunk)
+        else:
+            self._send_report_0x32(audio_data)
+
+    def _send_report_0x34(self, audio_data):
+        """Build and send a single Report 0x34 (547 bytes, 126 audio bytes)."""
+        self._load_r34_template()
+        buf = bytearray(547)
+        # Header from template (bytes 0-12 only, no control block)
+        buf[0:13] = self._r34_template[0:13]
+        buf[1] = self._r34_seq & 0xFF
+        tw = self._r34_ts & 0xFFFFFF
+        buf[10] = (tw >> 16) & 0xFF
+        buf[11] = (tw >> 8) & 0xFF
+        buf[12] = tw & 0xFF
+        # Audio at bytes 13-138
+        copy_len = min(len(audio_data), 126)
+        buf[13:13 + copy_len] = audio_data[:copy_len]
+        # CRC32 with seed 0xA2 over bytes 0-265
+        crc = ds5_bt_crc32(bytes(buf[:266]))
+        struct.pack_into('<I', buf, 266, crc)
+        self.dev.write(bytes(buf))
+        self._r34_seq = (self._r34_seq + 0x20) & 0xFF
+        self._r34_ts += 0x20000
+
     def _send_report_0x32(self, audio_data):
-        """Build and send a single Report 0x32."""
+        """Build and send a single Report 0x32 (legacy, 141 bytes)."""
         seq = self._haptic_seq
         REPORT_ID = 0x32
         pkt_0x11 = bytes([
@@ -672,7 +739,7 @@ class DS5Client:
                         continue
                 audio = self._resample_chunk(chunk)
                 self._update_peak(audio)
-                self._send_report_0x32(audio)
+                self._send_haptic_report(audio)
 
             else:  # raw
                 with self._haptic_lock:
@@ -682,7 +749,7 @@ class DS5Client:
                     else:
                         continue
                 self._update_peak(audio)
-                self._send_report_0x32(audio)
+                self._send_haptic_report(audio)
 
     def start_recording(self, path):
         import wave
