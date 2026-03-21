@@ -31,20 +31,21 @@ def write_wav(filename, left_samples, right_samples):
 
 
 def constant_section(value, n=SAMPLES_PER_SECTION):
+    """Constant DC value — motor holds position."""
     return [value] * n
 
 
 def main():
-    # s16 values
-    MAX_VAL = 32767
-    MID_VAL = 16384
-    ZERO_VAL = 0
+    # s16 values: DC levels for haptic motor position
+    MAX_VAL = 32767   # should appear as 0x7f in s8
+    MID_VAL = 16384   # should appear as 0x40 in s8
+    ZERO_VAL = 0      # should appear as 0x00 in s8
 
-    print("Generating test WAVs...\n")
+    print("Generating test WAVs (DC levels for haptic analysis)...\n")
 
     # 1. Stereo: max, mid, zero, repeat
     print("1. test_pattern_stereo.wav (both channels)")
-    print("   Pattern: 1s MAX | 1s MID | 1s ZERO | 1s MAX | 1s MID | 1s ZERO")
+    print("   Pattern: 1s MAX(7f) | 1s MID(40) | 1s ZERO(00) | repeat")
     pattern = (
         constant_section(MAX_VAL) +
         constant_section(MID_VAL) +
