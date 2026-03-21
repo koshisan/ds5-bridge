@@ -639,8 +639,8 @@ class DS5Client:
 
     def _update_peak(self, audio_data):
         """Update waveform + peak meter."""
-        self.haptic_waveform = list(audio_data[:64])
-        peak = max(abs(((b + 128) % 256) - 128) for b in audio_data[:64]) / 128.0
+        self.haptic_waveform = list(audio_data[:min(len(audio_data), 126)])
+        peak = max(abs(b if b < 128 else b - 256) for b in audio_data) / 128.0 if audio_data else 0
         self.haptic_peak = peak
         self.haptic_count += 1
         now = time.monotonic()
@@ -1140,7 +1140,7 @@ class DS5ClientGUI:
             cv.create_line(0, mid, w, mid, fill='#333333')
             # Draw L channel (even bytes) and R channel (odd bytes) - auto-scaled
             n = len(wf) // 2
-            centered = [wf[i] - 128 for i in range(len(wf))]
+            centered = [wf[i] if wf[i] < 128 else wf[i] - 256 for i in range(len(wf))]
             max_val = max(abs(v) for v in centered) if centered else 1
             if max_val < 1:
                 max_val = 1
@@ -1155,7 +1155,7 @@ class DS5ClientGUI:
             if len(pts_l) >= 2:
                 cv.create_line(*[c for p in pts_l for c in p], fill='#66aaff', width=1)
                 cv.create_line(*[c for p in pts_r for c in p], fill='#33cc66', width=1)
-                cv.create_text(w - 4, 4, anchor='ne', text=f'u8 +/-{max_val}', fill='#555555', font=('Consolas', 7))
+                cv.create_text(w - 4, 4, anchor='ne', text=f's8 +/-{max_val}', fill='#555555', font=('Consolas', 7))
 
         self.root.after(50, self._update_loop)
 
