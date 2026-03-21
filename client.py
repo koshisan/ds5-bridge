@@ -55,8 +55,8 @@ def output_receiver(sock, dev, is_bt, haptic_queue=None):
                 continue
             # Debug: log ALL received packets
 
-            # Route 0x32 haptic packets to haptic handler
-            if data[0] == 0x32 and haptic_queue is not None:
+            # Route audio packets to haptic handler
+            if data[0] in (0x32, 0x40) and haptic_queue is not None:
                 haptic_queue.put((data, addr))
                 continue
 
@@ -139,70 +139,110 @@ def output_receiver(sock, dev, is_bt, haptic_queue=None):
 
 
 
+def _load_haptic_template():
+    """Load captured Report 0x34 template for BT haptics."""
+    import os
+    for path in [os.path.join(os.path.dirname(__file__), "dsx_report34_capture.bin"),
+                 "dsx_report34_capture.bin"]:
+        try:
+            with open(path, "rb") as f:
+                data = f.read(547)
+            if len(data) >= 547:
+                return data[:547]
+        except FileNotFoundError:
+            pass
+
+    # Default template from known constants
+    buf = bytearray(547)
+    buf[0] = 0x34
+    buf[2:5] = b'\x91\x07\xfe'
+    buf[5:10] = b'\x30\x30\x30\x30\x30'
+    buf[11] = 0xD2; buf[12] = 0x40
+    buf[139:143] = b'\x90\x3f\xfd\xf7'
+    buf[145:149] = b'\x7e\x7f\xff\x09'
+    buf[150] = 0x0F
+    buf[178:180] = b'\x0a\x07'
+    buf[182] = 0x02; buf[184] = 0x05
+    return bytes(buf)
+
+
+# Report 0x34 layout
+_R34_SIZE = 547
+_R34_AUDIO_START = 13
+_R34_AUDIO_END = 139
+_R34_AUDIO_LEN = 126   # 63 stereo frames
+_R34_CRC_OFFSET = 266
+_R34_TARGET_FRAMES = 63
+_R34_DOWNSAMPLE_RATIO = 48000 / 2079  # ~23.09
+_R34_INPUT_FRAMES_NEEDED = int(_R34_TARGET_FRAMES * _R34_DOWNSAMPLE_RATIO)  # ~1455
+
+
 def haptic_receiver(haptic_queue, dev, is_bt):
-    """Receive haptic audio packets and send as BT Report 0x32."""
-    haptic_count = 0
-    seq = 0
+    """Receive raw s16 48kHz audio, accumulate, downsample, send as Report 0x34.
 
-    REPORT_ID = 0x32
-    REPORT_SIZE = 141
-    SAMPLE_SIZE = 64
-
+    No timer, no sleep. Driven purely by incoming data rate from server.
+    Server sends 256 frames per callback at 48kHz (~5.3ms intervals).
+    We accumulate ~1455 input frames (~5.7 packets), then emit one Report 0x34.
+    """
     if not is_bt:
-        print("  [HAPTIC] Skipping - USB connection, haptics only work over BT")
+        print("  [HAPTIC] Skipping - USB, haptics via USB audio")
         return
 
-    print(f"  [HAPTIC] Listening on main UDP socket")
+    template = _load_haptic_template()
+    print(f"  [HAPTIC] Report 0x34: accumulate {_R34_INPUT_FRAMES_NEEDED} frames → "
+          f"{_R34_TARGET_FRAMES} frames/pkt, ratio 1:{_R34_DOWNSAMPLE_RATIO:.1f}")
+
+    seq = 0x80
+    ts = 0x80D240
+    sample_buf = bytearray()
+    haptic_count = 0
+    bytes_needed = _R34_INPUT_FRAMES_NEEDED * 4  # 4 bytes per s16 stereo frame
 
     while True:
         try:
             data, addr = haptic_queue.get()
-            if len(data) < 2 or data[0] != 0x32:
+            if len(data) < 4:
                 continue
 
-            audio_seq = data[1]
-            audio_samples = data[2:66]  # 64 bytes of audio (32 stereo samples)
+            # Accumulate s16 stereo samples (skip 2-byte header)
+            sample_buf.extend(data[2:])
 
-            if len(audio_samples) < SAMPLE_SIZE:
-                audio_samples = audio_samples + bytes(SAMPLE_SIZE - len(audio_samples))
+            # Emit Report 0x34 every time we have enough
+            while len(sample_buf) >= bytes_needed:
+                # Downsample + s16→s8 (same as test_report34.py --wav)
+                audio_s8 = bytearray(_R34_AUDIO_LEN)
+                for i in range(_R34_TARGET_FRAMES):
+                    src_off = int(i * _R34_DOWNSAMPLE_RATIO) * 4
+                    l = int.from_bytes(sample_buf[src_off:src_off+2], 'little', signed=True)
+                    r = int.from_bytes(sample_buf[src_off+2:src_off+4], 'little', signed=True)
+                    audio_s8[i*2] = (l >> 8) & 0xFF
+                    audio_s8[i*2+1] = (r >> 8) & 0xFF
 
-            # Build Report 0x32 using proven format from haptic_demo.py
-            payload_size = REPORT_SIZE - 1 - 4  # 136 bytes (minus report_id and crc)
+                del sample_buf[:bytes_needed]
 
-            # Packet 0x11: control (pid=0x11, sized=1, length=7)
-            pkt_0x11 = bytes([
-                (0x11 & 0x3F) | (0 << 6) | (1 << 7),  # pid=0x11, unk=0, sized=1
-                7,  # length
-                0b11111110, 0, 0, 0, 0, seq & 0xFF, 0  # data (7 bytes)
-            ])
+                # Build report
+                buf = bytearray(template)
+                buf[1] = seq & 0xFF
+                tw = ts & 0xFFFFFF
+                buf[10] = (tw >> 16) & 0xFF
+                buf[11] = (tw >> 8) & 0xFF
+                buf[12] = tw & 0xFF
+                buf[_R34_AUDIO_START:_R34_AUDIO_END] = audio_s8
+                crc = ds5_bt_crc32(bytes(buf[:_R34_CRC_OFFSET]))
+                struct.pack_into('<I', buf, _R34_CRC_OFFSET, crc)
 
-            # Packet 0x12: audio samples (pid=0x12, sized=1, length=64)
-            pkt_0x12_header = bytes([
-                (0x12 & 0x3F) | (0 << 6) | (1 << 7),  # pid=0x12, unk=0, sized=1
-                SAMPLE_SIZE,  # length
-            ])
+                dev.write(bytes(buf))
+                seq = (seq + 0x20) & 0xFF
+                ts += 0x20000
+                haptic_count += 1
 
-            # Build payload
-            packets = pkt_0x11 + pkt_0x12_header + bytes(audio_samples)
-            payload = packets.ljust(payload_size, b'\x00')
+                if haptic_count % 100 == 0:
+                    print(f"  [HAPTIC] {haptic_count} pkts, buf={len(sample_buf)}B",
+                          flush=True)
 
-            # Tag=0, seq in upper nibble
-            tag_seq = (seq & 0x0F) << 4
-
-            report_body = bytes([tag_seq]) + payload
-
-            # CRC32 over report_id + body
-            crc_data = bytes([REPORT_ID]) + report_body
-            crc = ds5_bt_crc32(crc_data)
-
-            # Final report
-            report = bytes([REPORT_ID]) + report_body + struct.pack('<I', crc)
-            dev.write(report)
-
-            seq = (seq + 1) & 0x0F
-            haptic_count += 1
-
-            print(f"  [HAPTIC] #{haptic_count} {report[:20].hex(' ')}", flush=True)
+            # Prevent buffer bloat (max 2 packets worth)
+            if len(sample_buf) > bytes_needed * 2:
+                del sample_buf[:len(sample_buf) - bytes_needed]
 
         except ConnectionResetError:
             continue
