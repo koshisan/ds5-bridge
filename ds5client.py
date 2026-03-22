@@ -448,16 +448,6 @@ class DS5Client:
                 copy_len = min(len(src), USB_REPORT_SIZE - 1)
                 report[1:1 + copy_len] = src[:copy_len]
 
-                # BT reports carry a BT-clock timestamp (5.33µs/tick).
-                # The virtual USB driver expects USB-clock (0.333µs/tick, 3MHz).
-                # Patch bytes 28-31 (offset 27+1 for report ID byte) with our
-                # own monotonic USB-clock counter to avoid gyro jumps in-game.
-                if self.is_bt:
-                    # Advance by ~188 ticks per report @ ~250Hz → ~3MHz equivalent
-                    self._usb_ts = (self._usb_ts + 188) & 0xFFFFFFFF
-                    import struct as _struct
-                    _struct.pack_into('<I', report, 28, self._usb_ts)
-
                 self.sock.sendto(bytes(report), self.target)
                 self.packets_sent += 1
 
