@@ -925,7 +925,7 @@ class DS5ClientGUI:
 
         self.root = tk.Tk()
         self.root.title('DS5 Bridge Client')
-        self.root.geometry('520x520')
+        self.root.geometry('520x460')
         self.root.resizable(False, False)
         self.root.protocol('WM_DELETE_WINDOW', self._minimize_to_tray)
         self.root.bind('<Unmap>', self._on_minimize)
@@ -1333,7 +1333,8 @@ class DS5ClientGUI:
             pystray.MenuItem('Show', self._tray_show),
             pystray.MenuItem('Exit', self._tray_exit),
         )
-        self._tray_icon = pystray.Icon('DS5Bridge', icon_image, 'DS5 Bridge Client', menu)
+        self._tray_icon = pystray.Icon('DS5Bridge', icon_image, 'DS5 Bridge Client', menu,
+                                       on_activate=self._tray_show)
         # Run tray icon in background thread
         threading.Thread(target=self._tray_icon.run, daemon=True).start()
 
