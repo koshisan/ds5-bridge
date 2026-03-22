@@ -1,4 +1,6 @@
-"""DS5 Bridge Client - GUI App with tabbed interface + tray icon."""
+"""DS5 Bridge Client - GUI App with tabbed interface + tray icon.
+Requirements: hidapi, pystray, Pillow
+"""
 import sys
 import os
 import json
@@ -18,6 +20,13 @@ try:
     import hid
 except ImportError:
     print("pip install hidapi")
+    sys.exit(1)
+
+try:
+    import pystray
+    from PIL import Image, ImageDraw
+except ImportError:
+    print("pip install pystray Pillow")
     sys.exit(1)
 
 # --- Constants ---
@@ -380,10 +389,13 @@ class DS5Client:
         self.log('DS5 disconnected')
 
     def _try_reconnect(self):
-        """Auto-reconnect to DS5 in background."""
+        """Auto-reconnect to DS5 in background. Restarts bridge when reconnected."""
+        if getattr(self, '_reconnecting', False):
+            return
+        self._reconnecting = True
         def loop():
             attempt = 0
-            while self.running and not self.connected:
+            while not self.connected and not getattr(self, '_shutting_down', False):
                 attempt += 1
                 time.sleep(2)
                 if self.dev:
@@ -394,12 +406,16 @@ class DS5Client:
                 ok, msg = self.find_and_open()
                 if ok:
                     self.log('DS5 reconnected!')
-                    # Restart input thread
-                    self._in_thread = threading.Thread(target=self._input_loop, daemon=True)
-                    self._in_thread.start()
+                    if self.running:
+                        # Restart input thread within existing bridge
+                        self._in_thread = threading.Thread(target=self._input_loop, daemon=True)
+                        self._in_thread.start()
+                    else:
+                        # Auto-start bridge
+                        self.start()
+                    self._reconnecting = False
                     return
-            if not self.running:
-                self.log('Reconnect cancelled (bridge stopped)')
+            self._reconnecting = False
         threading.Thread(target=loop, daemon=True).start()
 
     def _input_loop(self):
@@ -876,28 +892,34 @@ class DS5Client:
                     self._haptic_u8_buffer.extend(audio)
 
 
+def _create_tray_icon_image():
+    """Create a simple 64x64 blue circle icon programmatically."""
+    img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.ellipse([4, 4, 60, 60], fill=(50, 120, 220, 255), outline=(30, 80, 180, 255), width=2)
+    return img
+
+
 class DS5ClientGUI:
-    """Tkinter GUI with tabbed interface."""
+    """Tkinter GUI with tabbed interface + system tray."""
 
     def __init__(self):
         self.client = DS5Client(log_callback=self._log)
         self._log_buffer = []
+        self._tray_icon = None
 
         self.root = tk.Tk()
         self.root.title('DS5 Bridge Client')
         self.root.geometry('520x520')
         self.root.resizable(False, False)
-        self.root.protocol('WM_DELETE_WINDOW', self._on_close)
-
-        # Try to set icon
-        try:
-            self.root.iconbitmap(default='')
-        except: pass
+        self.root.protocol('WM_DELETE_WINDOW', self._minimize_to_tray)
+        self.root.bind('<Unmap>', self._on_minimize)
 
         self._build_ui()
+        self._setup_tray()
         self._update_loop()
 
-        # Auto-connect
+        # Auto-connect on startup
         self.root.after(500, self._auto_connect)
 
     def _build_ui(self):
@@ -916,13 +938,6 @@ class DS5ClientGUI:
         self.lbl_server.grid(row=0, column=0, sticky='w')
         self.lbl_stats = ttk.Label(srv_frame, text='', foreground='gray')
         self.lbl_stats.grid(row=1, column=0, sticky='w')
-
-        btn_frame = ttk.Frame(srv_frame)
-        btn_frame.grid(row=0, column=1, rowspan=2, sticky='e', padx=(20, 0))
-        self.btn_connect = ttk.Button(btn_frame, text='Start', width=10, command=self._toggle_bridge)
-        self.btn_connect.pack(side='left', padx=2)
-        self.btn_reconnect = ttk.Button(btn_frame, text='Reconnect DS5', width=14, command=self._reconnect)
-        self.btn_reconnect.pack(side='left', padx=2)
         srv_frame.columnconfigure(0, weight=1)
 
         # Physical DS5
@@ -1096,11 +1111,9 @@ class DS5ClientGUI:
             self.lbl_stats.config(
                 text=f'TX: {self.client.packets_sent}  |  RX: {self.client.packets_recv}  |  '
                      f'Features: {self.client.features_handled}  |  {self.client.send_rate:.0f} pkt/s')
-            self.btn_connect.config(text='Stop')
         else:
             self.lbl_server.config(text='Not connected', foreground='gray')
             self.lbl_stats.config(text='')
-            self.btn_connect.config(text='Start')
 
         # DS5 status
         if self.client.connected:
@@ -1110,10 +1123,10 @@ class DS5ClientGUI:
             for key, lbl in self.hw_labels.items():
                 val = self.client.hw_info.get(key, '-')
                 lbl.config(text=val if val else '-')
-        elif self.client.running:
+        elif getattr(self.client, '_reconnecting', False):
             self.lbl_ds5.config(text='Reconnecting...', foreground='orange')
         else:
-            self.lbl_ds5.config(text='Not connected', foreground='red')
+            self.lbl_ds5.config(text='Searching...', foreground='#cc8800')
             for lbl in self.hw_labels.values():
                 lbl.config(text='-')
 
@@ -1200,38 +1213,14 @@ class DS5ClientGUI:
             self.btn_record.config(text='Stop Rec')
 
     def _auto_connect(self):
+        """Auto-connect on startup. If DS5 not found, keep retrying."""
         def do():
             ok, msg = self.client.find_and_open()
             if ok:
                 self.client.start()
             else:
                 self.client.log(msg)
-        threading.Thread(target=do, daemon=True).start()
-
-    def _toggle_bridge(self):
-        if self.client.running:
-            self.client.stop()
-        else:
-            if not self.client.connected:
-                def do():
-                    ok, msg = self.client.find_and_open()
-                    if ok:
-                        self.client.start()
-                    else:
-                        self.client.log(msg)
-                threading.Thread(target=do, daemon=True).start()
-            else:
-                self.client.start()
-
-    def _reconnect(self):
-        def do():
-            self.client.disconnect()
-            time.sleep(0.5)
-            ok, msg = self.client.find_and_open()
-            if ok and self.client.running is False:
-                self.client.start()
-            elif not ok:
-                self.client.log(msg)
+                self.client._try_reconnect()
         threading.Thread(target=do, daemon=True).start()
 
     def _save_config(self):
@@ -1286,9 +1275,43 @@ class DS5ClientGUI:
         except Exception as e:
             self.client.log(f'Autostart error: {e}')
 
-    def _on_close(self):
+    def _setup_tray(self):
+        """Create system tray icon with Show/Exit menu."""
+        icon_image = _create_tray_icon_image()
+        menu = pystray.Menu(
+            pystray.MenuItem('Show', self._tray_show),
+            pystray.MenuItem('Exit', self._tray_exit),
+        )
+        self._tray_icon = pystray.Icon('DS5Bridge', icon_image, 'DS5 Bridge Client', menu)
+        # Run tray icon in background thread
+        threading.Thread(target=self._tray_icon.run, daemon=True).start()
+
+    def _minimize_to_tray(self):
+        """Hide window to tray (called on X button click)."""
+        self.root.withdraw()
+
+    def _on_minimize(self, event):
+        """Minimize to tray when minimize button is pressed."""
+        if event.widget == self.root and self.root.state() == 'iconic':
+            self.root.after(10, self._minimize_to_tray)
+
+    def _tray_show(self, icon=None, item=None):
+        """Restore window from tray."""
+        self.root.after(0, self._restore_window)
+
+    def _restore_window(self):
+        self.root.deiconify()
+        self.root.state('normal')
+        self.root.lift()
+        self.root.focus_force()
+
+    def _tray_exit(self, icon=None, item=None):
+        """Fully quit the application."""
+        self.client._shutting_down = True
         self.client.disconnect()
-        self.root.destroy()
+        if self._tray_icon:
+            self._tray_icon.stop()
+        self.root.after(0, self.root.destroy)
 
     def run(self):
         self.root.mainloop()
