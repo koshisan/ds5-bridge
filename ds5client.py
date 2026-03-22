@@ -420,11 +420,17 @@ class DS5Client:
 
     def _input_loop(self):
         """Read from DS5, send to server."""
+        empty_reads = 0
+        MAX_EMPTY_READS = 100  # 100 * 50ms = 5s of no data → treat as disconnect
         while self.running:
             try:
                 data = self.dev.read(128, 50)
                 if not data:
+                    empty_reads += 1
+                    if empty_reads >= MAX_EMPTY_READS:
+                        raise IOError('No data from controller (BT disconnect?)')
                     continue
+                empty_reads = 0
 
                 report = bytearray(USB_REPORT_SIZE)
                 report[0] = 0x01
