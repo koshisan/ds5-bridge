@@ -440,6 +440,8 @@ class DS5Client:
                 report[0] = 0x01
 
                 if self.is_bt:
+                    if data[0] != 0x31:
+                        self.log(f'BT non-0x31: ID=0x{data[0]:02X} len={len(data)} first8={bytes(data[:8]).hex()}')
                     src = data[2:] if data[0] == 0x31 else data[1:]
                 else:
                     src = data[1:] if data[0] == 0x01 else data
