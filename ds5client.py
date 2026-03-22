@@ -276,8 +276,6 @@ class DS5Client:
         self._record_wav = None
         self._record_samples = 0
         self.haptic_input_peak = 0.0
-        # Monotonic USB-clock timestamp for BT reports (USB tick = ~0.333µs = 3MHz)
-        self._usb_ts = 0
 
     def log(self, msg):
         ts = datetime.now().strftime('%H:%M:%S')
