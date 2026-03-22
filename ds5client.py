@@ -1330,11 +1330,10 @@ class DS5ClientGUI:
         """Create system tray icon with Show/Exit menu."""
         icon_image = _create_tray_icon_image()
         menu = pystray.Menu(
-            pystray.MenuItem('Show', self._tray_show),
+            pystray.MenuItem('Show', self._tray_show, default=True),
             pystray.MenuItem('Exit', self._tray_exit),
         )
-        self._tray_icon = pystray.Icon('DS5Bridge', icon_image, 'DS5 Bridge Client', menu,
-                                       on_activate=self._tray_show)
+        self._tray_icon = pystray.Icon('DS5Bridge', icon_image, 'DS5 Bridge Client', menu)
         # Run tray icon in background thread
         threading.Thread(target=self._tray_icon.run, daemon=True).start()
 
