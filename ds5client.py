@@ -276,6 +276,7 @@ class DS5Client:
         self._record_wav = None
         self._record_samples = 0
         self.haptic_input_peak = 0.0
+        self._usb_ts = 0  # monotone USB-clock für BT-Reports (0.33µs/tick @ 250Hz = +12121/report)
 
     def log(self, msg):
         ts = datetime.now().strftime('%H:%M:%S')
@@ -440,13 +441,19 @@ class DS5Client:
                 report[0] = 0x01
 
                 if self.is_bt:
-                    if data[0] != 0x31:
-                        self.log(f'BT non-0x31: ID=0x{data[0]:02X} len={len(data)} first8={bytes(data[:8]).hex()}')
                     src = data[2:] if data[0] == 0x31 else data[1:]
                 else:
                     src = data[1:] if data[0] == 0x01 else data
                 copy_len = min(len(src), USB_REPORT_SIZE - 1)
                 report[1:1 + copy_len] = src[:copy_len]
+
+                # BT: replace sensor_timestamp with monotonic USB-clock counter
+                # USB clock = 0.33µs/tick; at 250Hz = ~12121 ticks/report
+                # Without this, BT jitter causes variable deltaT → gyro jumps in-game
+                if self.is_bt:
+                    self._usb_ts = (self._usb_ts + 12121) & 0xFFFFFFFF
+                    import struct as _s
+                    _s.pack_into('<I', report, 28, self._usb_ts)
 
                 self.sock.sendto(bytes(report), self.target)
                 self.packets_sent += 1
