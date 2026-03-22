@@ -172,6 +172,10 @@ def read_ds5_info(dev, is_bt):
     """Read hardware info from DS5 via feature reports."""
     info = {}
 
+    # BT needs a moment after connect before feature reports are reliable
+    if is_bt:
+        time.sleep(0.3)
+
     # 0x20: Firmware/build date
     try:
         r = dev.get_feature_report(0x20, 64)
@@ -220,7 +224,7 @@ def read_ds5_info(dev, is_bt):
                 payload[1] = sub1
                 payload[2] = sub2
                 dev.send_feature_report(bytes(payload))
-            time.sleep(0.03)
+            time.sleep(0.06 if is_bt else 0.03)
             resp = dev.get_feature_report(0x81, 64)
             if resp and len(resp) >= 5 and resp[1] == sub1 and resp[2] == sub2:
                 data = bytes(resp[4:])
