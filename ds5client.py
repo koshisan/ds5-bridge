@@ -1124,7 +1124,14 @@ class DS5ClientGUI:
                 val = self.client.hw_info.get(key, '-')
                 lbl.config(text=val if val else '-')
         elif getattr(self.client, '_reconnecting', False):
-            self.lbl_ds5.config(text='Reconnecting...', foreground='orange')
+            # Show last known name if available, else generic
+            if self.client.dev_info:
+                name = 'DualSense Edge' if self.client.dev_info['product_id'] == 0x0DF2 else 'DualSense'
+            else:
+                name = 'DualSense'
+            self.lbl_ds5.config(text=f'{name} (disconnected) — reconnecting...', foreground='red')
+            for lbl in self.hw_labels.values():
+                lbl.config(text='-')
         else:
             self.lbl_ds5.config(text='Searching...', foreground='#cc8800')
             for lbl in self.hw_labels.values():
