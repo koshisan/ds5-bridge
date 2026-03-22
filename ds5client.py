@@ -893,7 +893,12 @@ class DS5Client:
 
 
 def _create_tray_icon_image():
-    """Create a simple 64x64 blue circle icon programmatically."""
+    """Load controller icon for system tray."""
+    icon_path = Path(__file__).parent / 'icon.png'
+    if icon_path.exists():
+        img = Image.open(icon_path).convert('RGBA').resize((64, 64), Image.LANCZOS)
+        return img
+    # Fallback: blue circle
     img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     draw.ellipse([4, 4, 60, 60], fill=(50, 120, 220, 255), outline=(30, 80, 180, 255), width=2)
@@ -914,6 +919,14 @@ class DS5ClientGUI:
         self.root.resizable(False, False)
         self.root.protocol('WM_DELETE_WINDOW', self._minimize_to_tray)
         self.root.bind('<Unmap>', self._on_minimize)
+
+        # Window icon (titlebar)
+        icon_path = Path(__file__).parent / 'icon.ico'
+        if icon_path.exists():
+            try:
+                self.root.iconbitmap(str(icon_path))
+            except Exception:
+                pass
 
         self._build_ui()
         self._setup_tray()
