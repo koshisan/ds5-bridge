@@ -442,7 +442,9 @@ class DS5Client:
                 report[0] = 0x01
 
                 if self.is_bt:
-                    src = data[2:] if data[0] == 0x31 else data[1:]
+                    if data[0] != 0x31:
+                        continue  # ignore non-input BT reports (status, battery, etc.)
+                    src = data[2:]
                 else:
                     src = data[1:] if data[0] == 0x01 else data
                 copy_len = min(len(src), USB_REPORT_SIZE - 1)
