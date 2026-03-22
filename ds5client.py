@@ -942,6 +942,10 @@ class DS5ClientGUI:
         self._setup_tray()
         self._update_loop()
 
+        # Start minimized if configured
+        if self.client.config.get('start_minimized', False):
+            self.root.after(100, self.root.withdraw)
+
         # Auto-connect on startup
         self.root.after(500, self._auto_connect)
 
@@ -1085,6 +1089,10 @@ class DS5ClientGUI:
         self.autostart_var = tk.BooleanVar(value=self.client.config.get('autostart', False))
         ttk.Checkbutton(opt_frame, text='Start with Windows', variable=self.autostart_var,
                        command=self._toggle_autostart).grid(row=0, column=0, sticky='w')
+
+        self.start_minimized_var = tk.BooleanVar(value=self.client.config.get('start_minimized', False))
+        ttk.Checkbutton(opt_frame, text='Start minimized', variable=self.start_minimized_var,
+                       command=self._toggle_start_minimized).grid(row=1, column=0, sticky='w')
 
         # === Tab 3: Log ===
         tab_log = ttk.Frame(notebook, padding=5)
@@ -1292,9 +1300,16 @@ class DS5ClientGUI:
             key_path = r'SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
             if enabled:
-                exe = sys.executable.replace('python.exe', 'pythonw.exe')
-                script = os.path.abspath(__file__)
-                winreg.SetValueEx(key, 'DS5Client', 0, winreg.REG_SZ, f'"{exe}" "{script}"')
+                # Compiled .exe: sys.executable IS the exe, no script needed
+                # Python script: use pythonw.exe to avoid console window
+                if getattr(sys, 'frozen', False):
+                    # PyInstaller / compiled exe
+                    cmd = f'"{sys.executable}"'
+                else:
+                    exe = sys.executable.replace('python.exe', 'pythonw.exe')
+                    script = os.path.abspath(__file__)
+                    cmd = f'"{exe}" "{script}"'
+                winreg.SetValueEx(key, 'DS5Client', 0, winreg.REG_SZ, cmd)
             else:
                 try: winreg.DeleteValue(key, 'DS5Client')
                 except FileNotFoundError: pass
@@ -1304,6 +1319,12 @@ class DS5ClientGUI:
             self.client.log(f'Autostart {"enabled" if enabled else "disabled"}')
         except Exception as e:
             self.client.log(f'Autostart error: {e}')
+
+    def _toggle_start_minimized(self):
+        enabled = self.start_minimized_var.get()
+        self.client.config['start_minimized'] = enabled
+        save_config(self.client.config)
+        self.client.log(f'Start minimized {"enabled" if enabled else "disabled"}')
 
     def _setup_tray(self):
         """Create system tray icon with Show/Exit menu."""
