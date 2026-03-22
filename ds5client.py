@@ -440,7 +440,7 @@ class DS5Client:
                 report[0] = 0x01
 
                 if self.is_bt:
-                    src = data[3:] if data[0] == 0x31 else data[1:]
+                    src = data[2:] if data[0] == 0x31 else data[1:]
                 else:
                     src = data[1:] if data[0] == 0x01 else data
                 copy_len = min(len(src), USB_REPORT_SIZE - 1)
