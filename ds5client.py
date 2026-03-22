@@ -425,10 +425,11 @@ class DS5Client:
     def _input_loop(self):
         """Read from DS5, send to server."""
         empty_reads = 0
-        MAX_EMPTY_READS = 100  # 100 * 50ms = 5s of no data → treat as disconnect
+        timeout_ms = 5 if self.is_bt else 50
+        MAX_EMPTY_READS = 1000  # 1000 * 5ms = 5s on BT, 1000 * 50ms = 50s on USB
         while self.running:
             try:
-                data = self.dev.read(128, 50)
+                data = self.dev.read(128, timeout_ms)
                 if not data:
                     empty_reads += 1
                     if empty_reads >= MAX_EMPTY_READS:
