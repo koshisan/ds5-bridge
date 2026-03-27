@@ -425,9 +425,25 @@ class DS5Client:
         threading.Thread(target=loop, daemon=True).start()
 
     def _input_loop(self):
-        """Read from DS5, send to server."""
+        """Read from DS5, send to server.
+
+        BT mode: DS5 sends at ~33Hz (30ms). Games expect 250Hz (4ms).
+        We interpolate each BT sample into ~7 USB-rate samples and
+        PACE them at 4ms intervals using a separate sender thread.
+        USB mode: pass through directly, no interpolation.
+        """
+        import struct as _s
         empty_reads = 0
         MAX_EMPTY_READS = 100  # 100 * 50ms = 5s of no data → treat as disconnect
+
+        # BT interpolation: queue for paced sending
+        if self.is_bt and not hasattr(self, '_interp_queue'):
+            self._interp_queue = queue.Queue(maxsize=64)
+            self._prev_bt_report = None
+            # Start paced sender thread
+            t = threading.Thread(target=self._bt_paced_sender, daemon=True)
+            t.start()
+
         while self.running:
             try:
                 data = self.dev.read(128, 50)
@@ -448,33 +464,55 @@ class DS5Client:
                 copy_len = min(len(src), USB_REPORT_SIZE - 1)
                 report[1:1 + copy_len] = src[:copy_len]
 
-                # BT timestamp handling:
-                # The original BT timestamps cause wild spinning (~200 RPM) in games,
-                # likely due to jumps/wraps that make deltaT near zero.
-                # Pure synthetic (+12121) fixes spinning but causes ruckeln because
-                # the constant delta doesn't match actual sample timing.
-                #
-                # Solution: Read the original BT timestamp delta and use it to
-                # drive a clean monotonic counter, clamping outliers.
-                if self.is_bt:
-                    import struct as _s
-                    orig_ts = _s.unpack_from('<I', report, 28)[0]
-                    if self._prev_orig_ts is not None:
-                        raw_delta = (orig_ts - self._prev_orig_ts) & 0xFFFFFFFF
-                        # Clamp to reasonable range: 2ms-8ms (6060-24242 ticks)
-                        # Normal is ~12121 ticks (4ms at 0.33µs/tick)
-                        if 3000 < raw_delta < 40000:
-                            delta = raw_delta
-                        else:
-                            delta = 12121  # fallback for outliers
-                    else:
-                        delta = 12121
-                    self._prev_orig_ts = orig_ts
-                    self._usb_ts = (self._usb_ts + delta) & 0xFFFFFFFF
-                    _s.pack_into('<I', report, 28, self._usb_ts)
+                if not self.is_bt:
+                    # USB: send as-is
+                    self.sock.sendto(bytes(report), self.target)
+                    self.packets_sent += 1
+                else:
+                    # BT: generate interpolated samples and queue them
+                    curr = bytes(report)
+                    prev = self._prev_bt_report
 
-                self.sock.sendto(bytes(report), self.target)
-                self.packets_sent += 1
+                    if prev is None:
+                        # First report: queue single sample
+                        self._interp_queue.put(curr)
+                    else:
+                        # Calculate how many 4ms steps fit in the BT interval
+                        orig_ts_curr = _s.unpack_from('<I', curr, 28)[0]
+                        orig_ts_prev = _s.unpack_from('<I', prev, 28)[0]
+                        raw_delta = (orig_ts_curr - orig_ts_prev) & 0xFFFFFFFF
+
+                        if 15000 < raw_delta < 606000:
+                            n_steps = max(1, round(raw_delta / 12121))
+                        else:
+                            n_steps = 7  # fallback ~30ms / 4ms
+                        n_steps = min(n_steps, 15)
+
+                        # Gyro/accel: 6 x int16 at offsets 16-27
+                        SENSOR_OFFSETS = list(range(16, 28, 2))
+                        prev_vals = [_s.unpack_from('<h', prev, o)[0] for o in SENSOR_OFFSETS]
+                        curr_vals = [_s.unpack_from('<h', curr, o)[0] for o in SENSOR_OFFSETS]
+
+                        # Drain old queue if we're falling behind (prevent stale data)
+                        while self._interp_queue.qsize() > n_steps:
+                            try:
+                                self._interp_queue.get_nowait()
+                            except queue.Empty:
+                                break
+
+                        for step in range(n_steps):
+                            t = (step + 1) / n_steps
+                            out = bytearray(curr)  # buttons/sticks from current
+                            for j, o in enumerate(SENSOR_OFFSETS):
+                                val = int(prev_vals[j] + (curr_vals[j] - prev_vals[j]) * t)
+                                val = max(-32768, min(32767, val))
+                                _s.pack_into('<h', out, o, val)
+                            try:
+                                self._interp_queue.put_nowait(bytes(out))
+                            except queue.Full:
+                                pass  # drop oldest would be better, but don't block
+
+                    self._prev_bt_report = curr
 
                 # Rate calculation
                 self._rate_count += 1
@@ -491,6 +529,46 @@ class DS5Client:
                     self.connected = False
                     self._try_reconnect()
                 break
+
+    def _bt_paced_sender(self):
+        """Send interpolated BT reports at USB rate (~250Hz / 4ms intervals)."""
+        import struct as _s
+        INTERVAL_S = 0.004  # 4ms
+        next_send = time.monotonic()
+
+        while self.running:
+            try:
+                # Wait for next scheduled send time
+                now = time.monotonic()
+                wait = next_send - now
+                if wait > 0.001:
+                    time.sleep(wait - 0.0005)
+                # Spin-wait for precision
+                while time.monotonic() < next_send:
+                    pass
+
+                next_send += INTERVAL_S
+                # Prevent drift accumulation if we fell behind
+                if time.monotonic() - next_send > 0.050:
+                    next_send = time.monotonic() + INTERVAL_S
+
+                try:
+                    report = self._interp_queue.get_nowait()
+                except queue.Empty:
+                    continue
+
+                # Stamp with monotonic USB timestamp
+                out = bytearray(report)
+                self._usb_ts = (self._usb_ts + 12121) & 0xFFFFFFFF
+                _s.pack_into('<I', out, 28, self._usb_ts)
+
+                self.sock.sendto(bytes(out), self.target)
+                self.packets_sent += 1
+
+            except Exception as e:
+                if self.running:
+                    self.log(f'Paced sender error: {e}')
+                    time.sleep(0.01)
 
     def _output_loop(self):
         """Receive from server, write to DS5."""
