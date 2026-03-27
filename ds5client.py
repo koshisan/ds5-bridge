@@ -277,6 +277,7 @@ class DS5Client:
         self._record_samples = 0
         self.haptic_input_peak = 0.0
         self._usb_ts = 0  # monotone USB-clock für BT-Reports (0.33µs/tick @ 250Hz = +12121/report)
+        self._prev_orig_ts = None  # previous BT sensor timestamp for delta calculation
 
     def log(self, msg):
         ts = datetime.now().strftime('%H:%M:%S')
@@ -447,10 +448,30 @@ class DS5Client:
                 copy_len = min(len(src), USB_REPORT_SIZE - 1)
                 report[1:1 + copy_len] = src[:copy_len]
 
-                # BT: pass through original sensor timestamps from the controller.
-                # The DS5's internal IMU clock is stable — synthetic timestamps
-                # caused gyro ruckeln because they didn't match actual sample timing.
-                # (Previously replaced with constant +12121/report, removed 2026-03-27)
+                # BT timestamp handling:
+                # The original BT timestamps cause wild spinning (~200 RPM) in games,
+                # likely due to jumps/wraps that make deltaT near zero.
+                # Pure synthetic (+12121) fixes spinning but causes ruckeln because
+                # the constant delta doesn't match actual sample timing.
+                #
+                # Solution: Read the original BT timestamp delta and use it to
+                # drive a clean monotonic counter, clamping outliers.
+                if self.is_bt:
+                    import struct as _s
+                    orig_ts = _s.unpack_from('<I', report, 28)[0]
+                    if self._prev_orig_ts is not None:
+                        raw_delta = (orig_ts - self._prev_orig_ts) & 0xFFFFFFFF
+                        # Clamp to reasonable range: 2ms-8ms (6060-24242 ticks)
+                        # Normal is ~12121 ticks (4ms at 0.33µs/tick)
+                        if 3000 < raw_delta < 40000:
+                            delta = raw_delta
+                        else:
+                            delta = 12121  # fallback for outliers
+                    else:
+                        delta = 12121
+                    self._prev_orig_ts = orig_ts
+                    self._usb_ts = (self._usb_ts + delta) & 0xFFFFFFFF
+                    _s.pack_into('<I', report, 28, self._usb_ts)
 
                 self.sock.sendto(bytes(report), self.target)
                 self.packets_sent += 1
