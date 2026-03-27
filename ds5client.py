@@ -447,13 +447,10 @@ class DS5Client:
                 copy_len = min(len(src), USB_REPORT_SIZE - 1)
                 report[1:1 + copy_len] = src[:copy_len]
 
-                # BT: replace sensor_timestamp with monotonic USB-clock counter
-                # USB clock = 0.33µs/tick; at 250Hz = ~12121 ticks/report
-                # Without this, BT jitter causes variable deltaT → gyro jumps in-game
-                if self.is_bt:
-                    self._usb_ts = (self._usb_ts + 12121) & 0xFFFFFFFF
-                    import struct as _s
-                    _s.pack_into('<I', report, 28, self._usb_ts)
+                # BT: pass through original sensor timestamps from the controller.
+                # The DS5's internal IMU clock is stable — synthetic timestamps
+                # caused gyro ruckeln because they didn't match actual sample timing.
+                # (Previously replaced with constant +12121/report, removed 2026-03-27)
 
                 self.sock.sendto(bytes(report), self.target)
                 self.packets_sent += 1
