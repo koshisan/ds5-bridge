@@ -449,26 +449,24 @@ class DS5Client:
                 report[1:1 + copy_len] = src[:copy_len]
 
                 # BT timestamp handling:
-                # The original BT timestamps cause wild spinning (~200 RPM) in games,
-                # likely due to jumps/wraps that make deltaT near zero.
-                # Pure synthetic (+12121) fixes spinning but causes ruckeln because
-                # the constant delta doesn't match actual sample timing.
-                #
-                # Solution: Read the original BT timestamp delta and use it to
-                # drive a clean monotonic counter, clamping outliers.
+                # DS5 BT sends at ~33Hz (~30ms intervals) with timestamps in
+                # 0.33µs ticks. USB sends at 250Hz (~4ms, delta ~12121 ticks).
+                # Games expect USB-rate timestamps but need correct deltaT for
+                # gyro integration. We pass through the real BT delta so the
+                # game calculates correct rotation per sample.
                 if self.is_bt:
                     import struct as _s
                     orig_ts = _s.unpack_from('<I', report, 28)[0]
                     if self._prev_orig_ts is not None:
                         raw_delta = (orig_ts - self._prev_orig_ts) & 0xFFFFFFFF
-                        # Clamp to reasonable range: 2ms-8ms (6060-24242 ticks)
-                        # Normal is ~12121 ticks (4ms at 0.33µs/tick)
-                        if 3000 < raw_delta < 40000:
+                        # Sanity clamp: 5ms-200ms (15000-606000 ticks)
+                        # BT normal is ~90000 ticks (~30ms)
+                        if 15000 < raw_delta < 606000:
                             delta = raw_delta
                         else:
-                            delta = 12121  # fallback for outliers
+                            delta = 90000  # fallback for BT rate
                     else:
-                        delta = 12121
+                        delta = 90000
                     self._prev_orig_ts = orig_ts
                     self._usb_ts = (self._usb_ts + delta) & 0xFFFFFFFF
                     _s.pack_into('<I', report, 28, self._usb_ts)
