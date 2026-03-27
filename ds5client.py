@@ -531,44 +531,74 @@ class DS5Client:
                 break
 
     def _bt_paced_sender(self):
-        """Send interpolated BT reports at USB rate (~250Hz / 4ms intervals)."""
+        """Send interpolated BT reports at USB rate (~250Hz / 4ms intervals).
+        
+        Uses multimedia timer resolution + spin-wait for accurate pacing.
+        On Windows, default timer resolution is ~15ms — way too coarse for 4ms.
+        """
         import struct as _s
         INTERVAL_S = 0.004  # 4ms
-        next_send = time.monotonic()
 
-        while self.running:
-            try:
-                # Wait for next scheduled send time
-                now = time.monotonic()
-                wait = next_send - now
-                if wait > 0.001:
-                    time.sleep(wait - 0.0005)
-                # Spin-wait for precision
-                while time.monotonic() < next_send:
-                    pass
+        # Windows: request 1ms timer resolution for better sleep accuracy
+        _timeBeginPeriod = None
+        try:
+            import ctypes
+            winmm = ctypes.windll.winmm
+            winmm.timeBeginPeriod(1)
+            _timeBeginPeriod = winmm.timeBeginPeriod
+            self.log('BT paced sender: 1ms timer resolution set')
+        except Exception:
+            pass
 
-                next_send += INTERVAL_S
-                # Prevent drift accumulation if we fell behind
-                if time.monotonic() - next_send > 0.050:
-                    next_send = time.monotonic() + INTERVAL_S
+        next_send = time.perf_counter()  # perf_counter is higher resolution than monotonic
 
+        try:
+            while self.running:
                 try:
-                    report = self._interp_queue.get_nowait()
-                except queue.Empty:
-                    continue
+                    # Sleep until ~1ms before target, then spin-wait
+                    now = time.perf_counter()
+                    wait = next_send - now
+                    if wait > 0.002:
+                        time.sleep(wait - 0.0015)
+                    # Spin-wait for precision
+                    while time.perf_counter() < next_send:
+                        pass
 
-                # Stamp with monotonic USB timestamp
-                out = bytearray(report)
-                self._usb_ts = (self._usb_ts + 12121) & 0xFFFFFFFF
-                _s.pack_into('<I', out, 28, self._usb_ts)
+                    next_send += INTERVAL_S
+                    # Prevent drift: if we fell behind by more than 2 intervals, reset
+                    if time.perf_counter() - next_send > INTERVAL_S * 2:
+                        next_send = time.perf_counter() + INTERVAL_S
 
-                self.sock.sendto(bytes(out), self.target)
-                self.packets_sent += 1
+                    try:
+                        report = self._interp_queue.get_nowait()
+                    except queue.Empty:
+                        # No data: send last known report with incremented timestamp
+                        # (keeps the stream alive at constant rate)
+                        if hasattr(self, '_last_sent_report') and self._last_sent_report is not None:
+                            report = self._last_sent_report
+                        else:
+                            continue
 
-            except Exception as e:
-                if self.running:
-                    self.log(f'Paced sender error: {e}')
-                    time.sleep(0.01)
+                    # Stamp with monotonic USB timestamp
+                    out = bytearray(report)
+                    self._usb_ts = (self._usb_ts + 12121) & 0xFFFFFFFF
+                    _s.pack_into('<I', out, 28, self._usb_ts)
+
+                    self.sock.sendto(bytes(out), self.target)
+                    self._last_sent_report = bytes(out)
+                    self.packets_sent += 1
+
+                except Exception as e:
+                    if self.running:
+                        self.log(f'Paced sender error: {e}')
+                        time.sleep(0.01)
+        finally:
+            # Restore timer resolution
+            if _timeBeginPeriod:
+                try:
+                    ctypes.windll.winmm.timeEndPeriod(1)
+                except Exception:
+                    pass
 
     def _output_loop(self):
         """Receive from server, write to DS5."""
