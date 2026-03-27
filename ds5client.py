@@ -425,9 +425,19 @@ class DS5Client:
         threading.Thread(target=loop, daemon=True).start()
 
     def _input_loop(self):
-        """Read from DS5, send to server."""
+        """Read from DS5, send to server.
+        
+        BT mode: DS5 sends at ~33Hz (30ms). Games expect 250Hz (4ms).
+        We interpolate each BT sample into multiple USB-rate samples
+        with linearly interpolated gyro/accel and evenly spaced timestamps.
+        """
+        import struct as _s
         empty_reads = 0
         MAX_EMPTY_READS = 100  # 100 * 50ms = 5s of no data → treat as disconnect
+
+        # BT interpolation state
+        self._prev_bt_report = None  # previous 64-byte report (for lerp)
+
         while self.running:
             try:
                 data = self.dev.read(128, 50)
@@ -448,31 +458,64 @@ class DS5Client:
                 copy_len = min(len(src), USB_REPORT_SIZE - 1)
                 report[1:1 + copy_len] = src[:copy_len]
 
-                # BT timestamp handling:
-                # DS5 BT sends at ~33Hz (~30ms intervals) with timestamps in
-                # 0.33µs ticks. USB sends at 250Hz (~4ms, delta ~12121 ticks).
-                # Games expect USB-rate timestamps but need correct deltaT for
-                # gyro integration. We pass through the real BT delta so the
-                # game calculates correct rotation per sample.
-                if self.is_bt:
-                    import struct as _s
-                    orig_ts = _s.unpack_from('<I', report, 28)[0]
-                    if self._prev_orig_ts is not None:
-                        raw_delta = (orig_ts - self._prev_orig_ts) & 0xFFFFFFFF
-                        # Sanity clamp: 5ms-200ms (15000-606000 ticks)
-                        # BT normal is ~90000 ticks (~30ms)
-                        if 15000 < raw_delta < 606000:
-                            delta = raw_delta
-                        else:
-                            delta = 90000  # fallback for BT rate
-                    else:
-                        delta = 90000
-                    self._prev_orig_ts = orig_ts
-                    self._usb_ts = (self._usb_ts + delta) & 0xFFFFFFFF
-                    _s.pack_into('<I', report, 28, self._usb_ts)
+                if not self.is_bt:
+                    # USB: send as-is, no interpolation needed
+                    self.sock.sendto(bytes(report), self.target)
+                    self.packets_sent += 1
+                else:
+                    # BT: interpolate between previous and current report
+                    # to produce USB-rate (250Hz) samples
+                    curr = bytes(report)
 
-                self.sock.sendto(bytes(report), self.target)
-                self.packets_sent += 1
+                    if self._prev_bt_report is None:
+                        # First report: just send it with synthetic timestamp
+                        self._usb_ts = (self._usb_ts + 12121) & 0xFFFFFFFF
+                        out = bytearray(curr)
+                        _s.pack_into('<I', out, 28, self._usb_ts)
+                        self.sock.sendto(bytes(out), self.target)
+                        self.packets_sent += 1
+                    else:
+                        prev = self._prev_bt_report
+                        # Calculate how many BT ticks elapsed
+                        orig_ts_curr = _s.unpack_from('<I', curr, 28)[0]
+                        orig_ts_prev = _s.unpack_from('<I', prev, 28)[0]
+                        raw_delta = (orig_ts_curr - orig_ts_prev) & 0xFFFFFFFF
+
+                        # How many 4ms steps fit in the BT interval?
+                        if 15000 < raw_delta < 606000:
+                            n_steps = max(1, round(raw_delta / 12121))
+                        else:
+                            n_steps = 7  # fallback ~30ms / 4ms
+
+                        # Cap to avoid flooding
+                        n_steps = min(n_steps, 15)
+
+                        # Gyro/accel offsets in report: 16-27 (6x int16)
+                        # Interpolate these linearly; copy everything else from curr
+                        SENSOR_OFFSETS = list(range(16, 28, 2))  # 6 x int16 values
+
+                        prev_vals = [_s.unpack_from('<h', prev, o)[0] for o in SENSOR_OFFSETS]
+                        curr_vals = [_s.unpack_from('<h', curr, o)[0] for o in SENSOR_OFFSETS]
+
+                        for step in range(n_steps):
+                            t = (step + 1) / n_steps  # 0 excluded (prev already sent), 1.0 = curr
+
+                            out = bytearray(curr)  # base on current (buttons, sticks, etc.)
+
+                            # Lerp gyro + accel
+                            for j, o in enumerate(SENSOR_OFFSETS):
+                                val = int(prev_vals[j] + (curr_vals[j] - prev_vals[j]) * t)
+                                val = max(-32768, min(32767, val))
+                                _s.pack_into('<h', out, o, val)
+
+                            # Monotonic USB timestamp
+                            self._usb_ts = (self._usb_ts + 12121) & 0xFFFFFFFF
+                            _s.pack_into('<I', out, 28, self._usb_ts)
+
+                            self.sock.sendto(bytes(out), self.target)
+                            self.packets_sent += 1
+
+                    self._prev_bt_report = curr
 
                 # Rate calculation
                 self._rate_count += 1
